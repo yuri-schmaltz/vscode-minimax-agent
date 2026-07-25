@@ -27,6 +27,28 @@
  *   mavis code-action run --kind <k> --file <path> --prompt <text>
  *                                  (mock) emits 1-3 {type:"patch"} or
  *                                  {type:"text"} events + done
+ *   mavis drive list [--category <cat>]   (mock) emits DriveItem rows
+ *                                  + done. Items are distributed across
+ *                                  7 categories (documents, excel, ppt,
+ *                                  images, videos, audio, other) so
+ *                                  tests can assert on category counts.
+ *   mavis drive get <id>           (mock) emits {type:"file", id, name,
+ *                                  category, sizeBytes, mimeType,
+ *                                  content: "<base64 or path>", ...}
+ *                                  + done.
+ *   mavis drive delete <id>        (mock) emits {type:"deleted", id}
+ *                                  + done.
+ *   mavis cron list                (mock) emits CronSummary rows + done
+ *                                  (mix of enabled / disabled + a funny
+ *                                  "Morning standup summary" entry).
+ *   mavis cron create --name <n> --schedule <s> --prompt <p> --agent <a>
+ *                                  [--disabled]    (mock) emits
+ *                                  {type:"cron", id:"cron_<rand>",
+ *                                  name, schedule, prompt, agent,
+ *                                  enabled, nextRunAt} + done.
+ *   mavis cron delete <id>         (mock) emits {type:"deleted", id} + done.
+ *   mavis cron enable <id>         (mock) emits {type:"cron", id, enabled:true} + done.
+ *   mavis cron disable <id>        (mock) emits {type:"cron", id, enabled:false} + done.
  *   mavis oauth code               (mock) emits {user_code, verification_uri,
  *                                  device_code, interval, expires_in}
  *   mavis oauth token --device-code <dc>  (mock) emits
@@ -117,6 +139,14 @@ async function main() {
         '  mavis session stream --session-id <id> [--dry-run]',
         '  mavis session switch <id>',
         '  mavis code-action run --kind <k> --file <path> --prompt <text>',
+        '  mavis drive list [--category <cat>]',
+        '  mavis drive get <id>',
+        '  mavis drive delete <id>',
+        '  mavis cron list',
+        '  mavis cron create --name <n> --schedule <s> --prompt <p> --agent <a> [--disabled]',
+        '  mavis cron delete <id>',
+        '  mavis cron enable <id>',
+        '  mavis cron disable <id>',
         '  mavis oauth code',
         '  mavis oauth token --device-code <dc>',
         '',
@@ -153,6 +183,30 @@ async function main() {
     }
     if (sub === 'code-action' && cmd === 'run') {
       return cmdCodeActionRun();
+    }
+    if (sub === 'drive' && cmd === 'list') {
+      return cmdDriveList();
+    }
+    if (sub === 'drive' && cmd === 'get') {
+      return cmdDriveGet();
+    }
+    if (sub === 'drive' && cmd === 'delete') {
+      return cmdDriveDelete();
+    }
+    if (sub === 'cron' && cmd === 'list') {
+      return cmdCronList();
+    }
+    if (sub === 'cron' && cmd === 'create') {
+      return cmdCronCreate();
+    }
+    if (sub === 'cron' && cmd === 'delete') {
+      return cmdCronDelete();
+    }
+    if (sub === 'cron' && cmd === 'enable') {
+      return cmdCronEnable();
+    }
+    if (sub === 'cron' && cmd === 'disable') {
+      return cmdCronDisable();
     }
     if (sub === 'oauth' && cmd === 'code') {
       return cmdOauthCode();
@@ -380,6 +434,239 @@ function cmdOauthToken() {
     expires_in: 3600,
     token_type: 'Bearer',
     scope: 'group_id profile model.completion',
+  });
+  emit({ type: 'done' });
+}
+
+// --- Drive (Fase 4) --------------------------------------------------------
+
+// The shim keeps an in-memory mock Drive so `get`/`delete` can find what
+// `list` advertised. Each list command reseeds with a stable set of items
+// across categories so the test suite gets deterministic counts.
+const DRIVE_SEED = (() => {
+  const now = nowTs();
+  return [
+    { id: 'drv_doc_1', name: 'project-spec.md', category: 'documents', sizeBytes: 12_345, mimeType: 'text/markdown', createdAt: now - 86_400_000, updatedAt: now - 3_600_000 },
+    { id: 'drv_doc_2', name: 'meeting-notes.txt', category: 'documents', sizeBytes: 2_048, mimeType: 'text/plain', createdAt: now - 172_800_000, updatedAt: now - 7_200_000 },
+    { id: 'drv_xls_1', name: 'q3-metrics.xlsx', category: 'excel', sizeBytes: 54_321, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', createdAt: now - 259_200_000, updatedAt: now - 1_800_000 },
+    { id: 'drv_ppt_1', name: 'all-hands-deck.pptx', category: 'ppt', sizeBytes: 987_654, mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', createdAt: now - 432_000_000, updatedAt: now - 86_400_000 },
+    { id: 'drv_img_1', name: 'logo.png', category: 'images', sizeBytes: 8_192, mimeType: 'image/png', createdAt: now - 604_800_000, updatedAt: now - 604_800_000 },
+    { id: 'drv_img_2', name: 'banner.jpg', category: 'images', sizeBytes: 65_536, mimeType: 'image/jpeg', createdAt: now - 345_600_000, updatedAt: now - 86_400_000 },
+    { id: 'drv_vid_1', name: 'demo-walkthrough.mp4', category: 'videos', sizeBytes: 12_345_678, mimeType: 'video/mp4', createdAt: now - 864_000_000, updatedAt: now - 1_209_600_000 },
+    { id: 'drv_aud_1', name: 'standup-recording.m4a', category: 'audio', sizeBytes: 1_234_567, mimeType: 'audio/mp4', createdAt: now - 172_800_000, updatedAt: now - 3_600_000 },
+    { id: 'drv_oth_1', name: 'archive.zip', category: 'other', sizeBytes: 2_345_678, mimeType: 'application/zip', createdAt: now - 1_296_000_000, updatedAt: now - 259_200_000 },
+  ];
+})();
+
+// Track which seeded ids have been deleted this process so subsequent
+// `drive get` / `drive delete` calls reflect the current state.
+const deletedDriveIds = new Set();
+
+function cmdDriveList() {
+  const wantCategory = arg('--category');
+  const items = DRIVE_SEED
+    .filter((it) => !deletedDriveIds.has(it.id))
+    .filter((it) => !wantCategory || it.category === wantCategory)
+    .map((it) => ({ ...it }));
+  for (const it of items) emit(it);
+  emit({ type: 'done', count: items.length });
+}
+
+function cmdDriveGet() {
+  const id = argv[2];
+  if (!id) {
+    logErr('drive get requires an id');
+    process.exit(2);
+  }
+  const found = DRIVE_SEED.find((it) => it.id === id && !deletedDriveIds.has(it.id));
+  if (!found) {
+    logErr('drive item not found: ' + id);
+    process.exit(3);
+  }
+  // Mock content: 8 bytes of base64 representing the item. Real CLI would
+  // stream the bytes; the TS layer treats the field as opaque.
+  emit({
+    type: 'file',
+    id: found.id,
+    name: found.name,
+    category: found.category,
+    sizeBytes: found.sizeBytes,
+    mimeType: found.mimeType,
+    createdAt: found.createdAt,
+    updatedAt: found.updatedAt,
+    url: 'https://example.invalid/drive/' + found.id,
+    content: Buffer.from('mock-content-for-' + found.id).toString('base64'),
+    contentIsBase64: true,
+  });
+  emit({ type: 'done' });
+}
+
+function cmdDriveDelete() {
+  const id = argv[2];
+  if (!id) {
+    logErr('drive delete requires an id');
+    process.exit(2);
+  }
+  if (!DRIVE_SEED.find((it) => it.id === id)) {
+    logErr('drive item not found: ' + id);
+    process.exit(3);
+  }
+  deletedDriveIds.add(id);
+  emit({ type: 'deleted', id });
+  emit({ type: 'done' });
+}
+
+// --- Cron (Fase 4) ---------------------------------------------------------
+
+function nextRunIso(schedule) {
+  // Cheap mock: add 1 hour for every `*` token. Real daemon will use
+  // cron-parser; this is good enough for the shim's "nextRunAt" hint.
+  const fields = (schedule || '* * * * *').trim().split(/\s+/);
+  let delta = 3_600_000;
+  for (const f of fields) {
+    if (f !== '*') delta += 600_000;
+  }
+  return new Date(nowTs() + delta).toISOString();
+}
+
+const CRON_SEED = (() => {
+  const now = nowTs();
+  return [
+    {
+      id: 'cron_morning',
+      name: 'Morning standup summary',
+      schedule: '0 8 * * 1-5',
+      prompt: 'Summarise the last 24h of commits and ping the team.',
+      agent: 'mavis',
+      enabled: true,
+      lastRunAt: now - 86_400_000,
+      nextRunAt: now + 3_600_000,
+      createdAt: now - 7 * 86_400_000,
+    },
+    {
+      id: 'cron_tests',
+      name: 'Run test suite every 6h',
+      schedule: '0 */6 * * *',
+      prompt: 'Run `npm test` and report failures.',
+      agent: 'mavis-coder',
+      enabled: true,
+      lastRunAt: now - 3 * 3_600_000,
+      nextRunAt: now + 3 * 3_600_000,
+      createdAt: now - 30 * 86_400_000,
+    },
+    {
+      id: 'cron_disabled',
+      name: 'Disabled nightly snapshot',
+      schedule: '0 2 * * *',
+      prompt: 'Take a snapshot of /var/log/mavis.',
+      agent: 'mavis',
+      enabled: false,
+      lastRunAt: now - 2 * 86_400_000,
+      nextRunAt: now + 22 * 3_600_000,
+      createdAt: now - 14 * 86_400_000,
+    },
+  ];
+})();
+
+const deletedCronIds = new Set();
+
+function cmdCronList() {
+  const items = CRON_SEED
+    .filter((c) => !deletedCronIds.has(c.id))
+    .map((c) => ({ ...c }));
+  for (const c of items) emit(c);
+  emit({ type: 'done', count: items.length });
+}
+
+function cmdCronCreate() {
+  const name = arg('--name');
+  const schedule = arg('--schedule');
+  const prompt = arg('--prompt');
+  const agent = arg('--agent') || 'mavis';
+  if (!name || !schedule || !prompt) {
+    logErr('cron create requires --name, --schedule and --prompt');
+    process.exit(2);
+  }
+  const id = randomId('cron');
+  const enabled = !flag('--disabled');
+  const row = {
+    id,
+    name,
+    schedule,
+    prompt,
+    agent,
+    enabled,
+    lastRunAt: undefined,
+    nextRunAt: nextRunIso(schedule),
+    createdAt: nowTs(),
+  };
+  emit({ type: 'cron', ...row });
+  emit({ type: 'done' });
+}
+
+function cmdCronDelete() {
+  const id = argv[2];
+  if (!id) {
+    logErr('cron delete requires an id');
+    process.exit(2);
+  }
+  if (!CRON_SEED.find((c) => c.id === id)) {
+    logErr('cron not found: ' + id);
+    process.exit(3);
+  }
+  deletedCronIds.add(id);
+  emit({ type: 'deleted', id });
+  emit({ type: 'done' });
+}
+
+function cmdCronEnable() {
+  const id = argv[2];
+  if (!id) {
+    logErr('cron enable requires an id');
+    process.exit(2);
+  }
+  const found = CRON_SEED.find((c) => c.id === id);
+  if (!found) {
+    logErr('cron not found: ' + id);
+    process.exit(3);
+  }
+  emit({
+    type: 'cron',
+    id,
+    name: found.name,
+    schedule: found.schedule,
+    prompt: found.prompt,
+    agent: found.agent,
+    enabled: true,
+    lastRunAt: found.lastRunAt,
+    nextRunAt: nextRunIso(found.schedule),
+    createdAt: found.createdAt,
+  });
+  emit({ type: 'done' });
+}
+
+function cmdCronDisable() {
+  const id = argv[2];
+  if (!id) {
+    logErr('cron disable requires an id');
+    process.exit(2);
+  }
+  const found = CRON_SEED.find((c) => c.id === id);
+  if (!found) {
+    logErr('cron not found: ' + id);
+    process.exit(3);
+  }
+  emit({
+    type: 'cron',
+    id,
+    name: found.name,
+    schedule: found.schedule,
+    prompt: found.prompt,
+    agent: found.agent,
+    enabled: false,
+    lastRunAt: found.lastRunAt,
+    nextRunAt: found.nextRunAt,
+    createdAt: found.createdAt,
   });
   emit({ type: 'done' });
 }
