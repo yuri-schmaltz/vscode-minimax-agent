@@ -14,11 +14,14 @@
  * responsible for cleanly disposing every long-lived resource.
  */
 import { commands, env, ExtensionContext, StatusBarAlignment, Uri, window, workspace } from 'vscode';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { MavisClient } from './client/MavisClient';
 import { SecretStore } from './auth/SecretStore';
 import { OAuthManager } from './auth/OAuth';
 import { StatusBarController } from './statusbar/StatusBar';
 import { ChatViewProvider } from './views/ChatViewProvider';
+import { DriveViewProvider, writeTempDriveFile, encodeDrivePayload } from './views/DriveViewProvider';
 import { SessionCache, createSessionCache } from './util/SessionCache';
 import {
   CodeActionProviderDeps,
@@ -26,13 +29,16 @@ import {
   registerCodeActionProvider,
   runCodeAction,
 } from './codeactions/Provider';
-import { CodeActionKind as MavisActionKind } from './client/types';
+import { CodeActionKind as MavisActionKind, DriveItem } from './client/types';
+import { CronForm } from './cron/CronForm';
+import { CronListProvider } from './cron/CronListProvider';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
 let oauth: OAuthManager | undefined;
 let statusBar: StatusBarController | undefined;
 let chatView: ChatViewProvider | undefined;
+let driveView: DriveViewProvider | undefined;
 let sessionCounter = 0;
 let sessionCache: SessionCache | undefined;
 let codeActionDisposable: { dispose(): void } | undefined;
@@ -134,6 +140,41 @@ export function activate(context: ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
     }),
   );
+
+  // Drive tree view. The provider is hosted as a regular
+  // TreeDataProvider (not a WebviewViewProvider). The actual data fetch
+  // happens when the user opens the view; the provider's constructor
+  // only wires the change listener.
+  driveView = new DriveViewProvider({
+    client,
+    openItem: async (item: DriveItem) => {
+      try {
+        const file = await client!.getDriveFile(item.id);
+        const local = await writeTempDriveFile(file);
+        await commands.executeCommand('vscode.open', Uri.file(local));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        void window.showErrorMessage(`Mavis: open drive item failed: ${message}`);
+      }
+    },
+    attachToChat: async (item: DriveItem) => {
+      const payload = encodeDrivePayload(item);
+      chatView?.addAttachment({
+        id: `att_drive_${item.id}`,
+        name: item.name,
+        source: 'drive',
+        driveId: item.id,
+        mimeType: item.mimeType,
+      });
+      void window.showInformationMessage(`Attached "${item.name}" to chat.`);
+      void payload;
+    },
+  });
+  context.subscriptions.push(
+    window.registerTreeDataProvider('mavis.driveView', driveView),
+  );
+  // Prime the list so the tree has something to show when first opened.
+  void driveView.refresh();
 
   // Code actions. The host (`sendTextToChat`) injects assistant text
   // into the active chat so the user sees it inline.
@@ -270,6 +311,133 @@ export function activate(context: ExtensionContext): void {
         window.showErrorMessage(`Mavis code action failed: ${message}`);
       }
     }),
+    commands.registerCommand('mavis.refreshDrive', async () => {
+      await driveView?.refresh();
+    }),
+    commands.registerCommand('mavis.openDriveItem', async (id: unknown) => {
+      if (typeof id !== 'string') return;
+      const items = driveView?.getItems() ?? [];
+      const item = items.find((i) => i.id === id);
+      if (!item) {
+        // Refresh and try again; the user may have opened the view
+        // before the initial list resolved.
+        await driveView?.refresh();
+        const refreshed = driveView?.getItems() ?? [];
+        const found = refreshed.find((i) => i.id === id);
+        if (!found) {
+          void window.showErrorMessage(`Mavis: drive item ${id} not found.`);
+          return;
+        }
+        await driveView?.openItem(found);
+        return;
+      }
+      await driveView?.openItem(item);
+    }),
+    commands.registerCommand('mavis.downloadDriveItem', async (id: unknown) => {
+      if (typeof id !== 'string') return;
+      const items = driveView?.getItems() ?? [];
+      const item = items.find((i) => i.id === id);
+      if (!item) {
+        void window.showErrorMessage(`Mavis: drive item ${id} not found.`);
+        return;
+      }
+      try {
+        const file = await client!.getDriveFile(item.id);
+        const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.globalStorageUri.fsPath;
+        const targetDir = path.join(workspaceRoot, 'mavis-drive');
+        await fs.mkdir(targetDir, { recursive: true });
+        const safe = file.name.replace(/[\\/:*?"<>|]+/g, '_');
+        const target = path.join(targetDir, safe);
+        const data = file.contentIsBase64
+          ? Buffer.from(file.content, 'base64')
+          : Buffer.from(file.content, 'utf8');
+        await fs.writeFile(target, data);
+        void window.showInformationMessage(`Saved to ${target}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        void window.showErrorMessage(`Mavis: download failed: ${message}`);
+      }
+    }),
+    commands.registerCommand('mavis.deleteDriveItem', async (id: unknown) => {
+      if (typeof id !== 'string') return;
+      const items = driveView?.getItems() ?? [];
+      const item = items.find((i) => i.id === id);
+      if (!item) {
+        void window.showErrorMessage(`Mavis: drive item ${id} not found.`);
+        return;
+      }
+      const choice = await window.showWarningMessage(
+        `Delete "${item.name}" from the Drive? This cannot be undone.`,
+        { modal: true },
+        'Delete',
+      );
+      if (choice !== 'Delete') return;
+      try {
+        await client!.deleteDriveFile(item.id);
+        await driveView?.refresh();
+        void window.showInformationMessage(`Deleted "${item.name}".`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        void window.showErrorMessage(`Mavis: delete failed: ${message}`);
+      }
+    }),
+    commands.registerCommand('mavis.attachToChat', async (id: unknown) => {
+      if (typeof id !== 'string') return;
+      const items = driveView?.getItems() ?? [];
+      const item = items.find((i) => i.id === id);
+      if (!item) {
+        void window.showErrorMessage(`Mavis: drive item ${id} not found.`);
+        return;
+      }
+      await driveView?.attachToChat(item);
+    }),
+    commands.registerCommand('mavis._attachToChat', async (payload: unknown) => {
+      // Fired by the Drive view's default attachToChat when the host
+      // hasn't supplied a custom handler. We treat the payload as a
+      // {file:<id>:<name>} reference and add it to the chat.
+      if (typeof payload !== 'string') return;
+      const m = /^\{file:([^:}]+):([^:}]+)\}$/.exec(payload);
+      if (!m) return;
+      chatView?.addAttachment({
+        id: `att_drive_${m[1]}`,
+        name: m[2],
+        source: 'drive',
+        driveId: m[1],
+      });
+    }),
+    commands.registerCommand('mavis.scheduleCron', async () => {
+      if (!client) return;
+      const form = new CronForm({
+        client,
+        host: {
+          showInputBox: async (options) => await window.showInputBox(options),
+          showQuickPick: async (items, options) => {
+            const pick = await window.showQuickPick(items as never, options);
+            return pick as { label: string; description?: string; detail?: string } | undefined;
+          },
+          showInformationMessage: async (m) => (await window.showInformationMessage(m)) as string | undefined,
+          showErrorMessage: async (m) => (await window.showErrorMessage(m)) as string | undefined,
+        },
+        defaultAgent: client.getActiveAgent(),
+      });
+      await form.run();
+    }),
+    commands.registerCommand('mavis.listCrons', async () => {
+      if (!client) return;
+      const provider = new CronListProvider({
+        client,
+        host: {
+          showInputBox: async (options) => await window.showInputBox(options),
+          showQuickPick: async (items, options) => {
+            const pick = await window.showQuickPick(items as never, options);
+            return pick as { label: string; description?: string; detail?: string } | undefined;
+          },
+          showInformationMessage: async (m) => (await window.showInformationMessage(m)) as string | undefined,
+          showErrorMessage: async (m) => (await window.showErrorMessage(m)) as string | undefined,
+        },
+      });
+      await provider.run();
+    }),
   );
 
   // On activation, surface "Hello" once (Fase 0 placeholder).
@@ -279,6 +447,8 @@ export function activate(context: ExtensionContext): void {
 export function deactivate(): void {
   statusBar?.dispose();
   statusBar = undefined;
+  driveView?.dispose();
+  driveView = undefined;
   chatView = undefined;
   codeActionDisposable?.dispose();
   codeActionDisposable = undefined;

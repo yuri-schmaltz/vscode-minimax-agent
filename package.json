@@ -90,6 +90,42 @@
         "command": "mavis.listAgents",
         "title": "List agents",
         "category": "Mavis"
+      },
+      {
+        "command": "mavis.refreshDrive",
+        "title": "Refresh drive",
+        "category": "Mavis",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mavis.openDriveItem",
+        "title": "Open drive item",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.downloadDriveItem",
+        "title": "Download drive item",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.deleteDriveItem",
+        "title": "Delete drive item",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.attachToChat",
+        "title": "Attach to chat",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.scheduleCron",
+        "title": "Schedule cron",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.listCrons",
+        "title": "List crons",
+        "category": "Mavis"
       }
     ],
     "viewsContainers": {
@@ -122,7 +158,38 @@
         {
           "id": "mavis.driveView",
           "name": "Drive",
-          "when": "false"
+          "when": "true"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "mavis.refreshDrive",
+          "when": "view == mavis.driveView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "mavis.openDriveItem",
+          "when": "view == mavis.driveView && viewItem == mavis.driveItem",
+          "group": "open"
+        },
+        {
+          "command": "mavis.downloadDriveItem",
+          "when": "view == mavis.driveView && viewItem == mavis.driveItem",
+          "group": "download"
+        },
+        {
+          "command": "mavis.attachToChat",
+          "when": "view == mavis.driveView && viewItem == mavis.driveItem",
+          "group": "chat"
+        },
+        {
+          "command": "mavis.deleteDriveItem",
+          "when": "view == mavis.driveView && viewItem == mavis.driveItem",
+          "group": "danger"
         }
       ]
     },
