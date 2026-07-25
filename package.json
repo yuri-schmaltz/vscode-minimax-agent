@@ -1,13 +1,15 @@
 {
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
-  "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.",
+  "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
   "version": "0.1.0",
   "publisher": "minimax",
   "license": "MIT",
+  "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yuri-schmaltz/vscode-minimax-agent.git"
+    "url": "https://github.com/yuri-schmaltz/vscode-minimax-agent",
+    "directory": "."
   },
   "bugs": {
     "url": "https://github.com/yuri-schmaltz/vscode-minimax-agent/issues"
@@ -26,11 +28,17 @@
     "minimax",
     "agent",
     "ai",
+    "code-actions",
     "chat",
-    "assistant"
+    "drive",
+    "cron"
   ],
   "main": "out/extension.js",
   "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#7C3AED",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -209,12 +217,23 @@
         "command": "mavis.switchSession",
         "key": "ctrl+shift+,",
         "mac": "cmd+shift+,"
+      },
+      {
+        "command": "mavis.openSettings",
+        "key": "ctrl+alt+,",
+        "mac": "cmd+alt+,",
+        "when": "editorTextFocus || workbench.focus.activeContainerHasMavisProvider"
       }
     ],
     "configuration": {
       "title": "MiniMax Agent",
       "type": "object",
       "properties": {
+        "mavis.defaultAgent": {
+          "type": "string",
+          "default": "mavis",
+          "markdownDescription": "Which agent to spawn by default when starting a new chat."
+        },
         "mavis.cliPath": {
           "type": "string",
           "default": "",
@@ -223,22 +242,27 @@
         "mavis.cliVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bundled CLI version (shown in the status bar). Defaults to the bundled shim's `package.json` version."
-        },
-        "mavis.defaultAgent": {
-          "type": "string",
-          "default": "mavis",
-          "markdownDescription": "Which agent to spawn by default when starting a new chat."
-        },
-        "mavis.telemetry": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Opt-in anonymous usage telemetry. **Default: off** — no events are collected unless you explicitly enable this."
+          "markdownDescription": "Bundled CLI version (shown in the status bar and settings UI). Defaults to the bundled shim's `package.json` version."
         },
         "mavis.model": {
           "type": "string",
           "default": "",
           "markdownDescription": "Override the model used for completions. Empty means 'use server default'."
+        },
+        "mavis.telemetry": {
+          "type": "string",
+          "enum": [
+            "false",
+            "true",
+            "ask-once"
+          ],
+          "enumDescriptions": [
+            "No events are ever sent.",
+            "Send anonymous usage events (command id, message length, code-action kind, cron id — no content).",
+            "Show the one-time opt-in notice; never ask again after the user answers."
+          ],
+          "default": "false",
+          "markdownDescription": "Opt-in anonymous usage telemetry. **Default: off** — no events are collected unless you explicitly enable this or accept the one-time opt-in notice."
         },
         "mavis.oauthFlow": {
           "type": "string",
@@ -264,8 +288,9 @@
     "package": "npm run build && vsce package",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx --import ./test/helpers/registerVscodeMock.cjs $(find test -name '*.test.ts' | tr '\\n' ' ')",
+    "test": "node --test --import tsx --import ./test/helpers/registerVscodeMock.cjs $(find test src -name '*.test.ts' | tr '\\n' ' ')",
     "test:coverage": "c8 --reporter=text --reporter=text-summary --check-coverage --lines=60 --branches=60 --functions=80 --statements=60 --include='src/**/*.ts' npm test",
+    "test:e2e": "npm run package && node -e \"require('./test/e2e/extension.test.js').go().catch(e => { console.error(e); process.exit(1); })\"",
     "lint:secrets": "node scripts/check-secrets.cjs",
     "pretest": "npm run typecheck && npm run lint"
   },
