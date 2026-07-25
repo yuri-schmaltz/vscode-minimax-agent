@@ -5,9 +5,11 @@
 **VEREDITO FINAL: PASS**
 
 - **Branch**: `main`
-- **HEAD commit**: `f719752` (`chore: package and verify .vsix`)
-- **Build**: PASS — lint, typecheck, test (36/36), package all green
-- **.vsix**: `/workspace/repo-clone/vscode-agent-0.1.0.vsix` (270.58 KB, 22 files)
+- **HEAD commit**: `7c0c862` (`test: add adversarial coverage`)
+- **Build**: PASS — lint, typecheck, secret-leak audit, 97/97 tests, package all green
+- **Coverage**: 84.94% stmts / 78.63% branches / 92.48% functions (gate passes)
+- **Adversarial**: PKCE ✓, Device code ✓, NDJSON ✓, SecretStore ✓, MavisClient ✓, ChatViewProvider ✓
+- **.vsix**: `/workspace/repo-clone/vscode-agent-0.1.0.vsix` (271.5 KB, 22 files)
 - **Pushed to**: `https://github.com/yuri-schmaltz/vscode-minimax-agent` (remote `main`, sanitized)
 - **Approach**: manual scaffold (no `yo code` boilerplate) per task preference.
 - **Rejection reason on attempt 1**: "No explicit VERDICT found" — the
