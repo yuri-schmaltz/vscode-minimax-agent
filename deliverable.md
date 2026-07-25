@@ -5,7 +5,7 @@
 **VEREDITO FINAL: PASS**
 
 - **Branch**: `main`
-- **HEAD commit**: `7c0c862` (`test: add adversarial coverage`)
+- **HEAD commit**: `4cad85b` (`docs: refresh deliverable.md with cycle1-tests HEAD + 97/97 numbers`)
 - **Build**: PASS — lint, typecheck, secret-leak audit, 97/97 tests, package all green
 - **Coverage**: 84.94% stmts / 78.63% branches / 92.48% functions (gate passes)
 - **Adversarial**: PKCE ✓, Device code ✓, NDJSON ✓, SecretStore ✓, MavisClient ✓, ChatViewProvider ✓
