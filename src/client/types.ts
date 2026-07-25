@@ -71,6 +71,73 @@ export type CodeActionKind =
   | 'bugs'
   | 'custom';
 
+/** Drive file categories returned by `mavis drive list`. */
+export type DriveCategory =
+  | 'documents'
+  | 'excel'
+  | 'ppt'
+  | 'images'
+  | 'videos'
+  | 'audio'
+  | 'other';
+
+/** All known categories in display order (used by DriveViewProvider). */
+export const DRIVE_CATEGORIES: ReadonlyArray<DriveCategory> = [
+  'documents',
+  'excel',
+  'ppt',
+  'images',
+  'videos',
+  'audio',
+  'other',
+];
+
+/** Summary row from `mavis drive list`. */
+export interface DriveItem {
+  id: string;
+  name: string;
+  category: DriveCategory;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: number;
+  updatedAt: number;
+  url?: string;
+}
+
+/** Detail row from `mavis drive get <id>` (one-shot, includes content). */
+export interface DriveFile extends DriveItem {
+  /** Either a base64 payload or a local path on disk. */
+  content: string;
+  /** When `content` is base64, this is set; when it's a path it's not. */
+  contentIsBase64?: boolean;
+}
+
+/** Input for `mavis cron create`. */
+export interface CronInput {
+  name: string;
+  /** 5-field cron expression (e.g. "0 8 * * *"). */
+  schedule: string;
+  /** Prompt text the daemon will send at every run. */
+  prompt: string;
+  /** Agent id (default: "mavis"). */
+  agent?: string;
+  /** Persist enabled flag (default: true). */
+  enabled?: boolean;
+}
+
+/** Row from `mavis cron list` and the return of `createCron`. */
+export interface CronSummary {
+  id: string;
+  name: string;
+  schedule: string;
+  prompt: string;
+  agent: string;
+  enabled: boolean;
+  lastRunAt?: number;
+  nextRunAt?: number;
+  createdAt?: number;
+}
+
 /** Result of a code action. */
 export type CodeActionResult =
   | { kind: 'patch'; file: string; diff: string }
