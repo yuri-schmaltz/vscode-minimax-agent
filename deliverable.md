@@ -703,3 +703,118 @@ and the command palette picks up `Mavis: Schedule cron`,
 - **Out of scope** (cycle 4): Telemetry opt-in (Fase 5), i18n
   (Fase 5), Marketplace listing (Fase 5), Inline edit Cmd+K (Fase 6),
   Tasks provider (Fase 6).
+
+---
+
+# Cycle 4 deliverable — Fase 5 (polimento: telemetry opt-in, i18n pt-BR, marketplace polish, settings UI)
+
+## STATUS: READY
+
+**VEREDITO FINAL: PASS**
+
+See also: `/workspace/.mavis/plans/plan_13865894/outputs/cycle4-impl/deliverable.md`
+for the full per-task report.
+
+- **Branch**: `main`
+- **HEAD commit**: `5a11f0f`
+- **Tests**: **275 / 275** passing (+46 vs Cycle 3's 229)
+- **Coverage**: **90.56% stmts** / **80.77% branches** / **92.09% functions**
+- **.vsix**: `/workspace/repo-clone/vscode-agent-0.1.0.vsix` (**478.22 KB**, 23 files)
+- **Pushed to**: `https://github.com/yuri-schmaltz/vscode-minimax-agent` (remote `main`, sanitized)
+- **7 atomic Conventional Commits** (see git log 36fa14f..HEAD):
+  - `feat(telemetry)` — opt-in singleton + 4 event types, no PII
+  - `feat(i18n)` — en + pt-BR locale tables, 72 keys, t() helper
+  - `feat(settings)` — webview form, persisted to `globalState[mavis.settings]`
+  - `test(e2e)` — @vscode/test-electron scaffold
+  - `feat(extension)` — wire telemetry + settings + i18n into the host
+  - `chore(marketplace)` — package.json metadata + icon + keybinding
+  - `docs` — CHANGELOG + README + USER_GUIDE + DEV_GUIDE + PLAN status
+
+## Cycle 4 — Commits added
+
+```
+095bf91 feat(telemetry): add opt-in telemetry with single notice
+<hash>  feat(i18n): add en + pt-BR locale files with t() helper
+<hash>  feat(settings): add webview settings form
+e5fc3ba test(e2e): add @vscode/test-electron scaffold
+50ce56d feat(extension): wire telemetry + settings + i18n into the host
+210bb3b chore(marketplace): polish package.json metadata + icon
+5a11f0f docs: refresh CHANGELOG, README, USER_GUIDE, DEV_GUIDE for v0.1.0
+```
+
+## Cycle 4 — New files
+
+```
+src/telemetry/Telemetry.ts
+src/telemetry/__tests__/Telemetry.test.ts
+src/i18n/index.ts
+src/i18n/locales/en.json
+src/i18n/locales/pt-BR.json
+src/i18n/__tests__/t.test.ts
+src/views/SettingsViewProvider.ts
+webview/settings/main.tsx
+webview/settings/styles.css
+test/views/SettingsViewProvider.test.ts
+test/e2e/extension.test.ts
+test/e2e/scaffold.test.ts
+docs/USER_GUIDE.md
+docs/DEV_GUIDE.md
+```
+
+## Cycle 4 — Commands (none new)
+
+The `Mavis: Open Settings` command (introduced in Cycle 1) was
+rewired to open the new in-extension settings panel. A new
+keybinding `Cmd/Ctrl+Alt+,` was added to trigger it from the editor.
+
+## Cycle 4 — Settings
+
+| Setting | Change |
+|---|---|
+| `mavis.telemetry` | `boolean: false` → `string enum: "false" \| "true" \| "ask-once"` (with `enumDescriptions`) |
+| `mavis.cliVersion` | `markdownDescription` updated to mention "settings UI" |
+
+`contributes.configuration` was also reordered so the user-facing
+knobs (defaultAgent, cliPath, model) come first.
+
+## Cycle 4 — Tests before / after
+
+| | Tests | Pass | Stmts | Branches |
+|---|---|---|---|---|
+| Cycle 3 (HEAD `36fa14f`) | 229 | 229 ✓ | 91.03% | 79.95% |
+| **Cycle 4 (HEAD `5a11f0f`)** | **275** | **275 ✓** | **90.56%** | **80.77%** |
+
+Net new: **+46** tests (16 telemetry + 15 i18n + 12 settings + 2 e2e scaffold + 1 e2e export).
+
+## Cycle 4 — i18n keys
+
+**72 keys** per locale (en + pt-BR), 100% parity verified by
+`t: en and pt-BR tables have the same key set (parity)` test.
+
+## Cycle 4 — Telemetry events
+
+**4 event types** (each with allow-listed dim keys only):
+- `command_invoked` (command id)
+- `chat_message_sent` (length bucket — never content)
+- `code_action_applied` (kind — never content)
+- `cron_fired` (cron id — never prompt)
+
+NEVER collected: message content, file paths, file contents, tokens, prompts.
+
+## Cycle 4 — .vsix path
+
+`/workspace/repo-clone/vscode-agent-0.1.0.vsix` (478.22 KB, 23 files)
+
+## Cycle 4 — Decisions
+
+1. `mavis.telemetry` is now a string enum (marketplace-friendly +
+   allows `ask-once`).
+2. Two webview bundles (chat + settings) — separate React roots +
+   CSPs, easier lifecycle.
+3. i18n is inlined at build time (no runtime HTTP fetch).
+4. `Telemetry.sanitizeDims` is the single chokepoint for PII; bad
+   dim keys drop the event entirely.
+5. Settings persist in `globalState` (not settings.json) so the
+   in-extension form works before the user opens VSCode's settings.
+6. Marketplace publication stays deferred (decision #2 of
+   `docs/PLAN.md`).
