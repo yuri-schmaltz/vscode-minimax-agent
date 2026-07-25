@@ -15,11 +15,18 @@
  *   mavis --version
  *   mavis --help
  *   mavis agent list               (NDJSON of Agent objects, one per line)
+ *   mavis agent switch <name>      (mock) emits contextChanged + done
  *   mavis session list             (NDJSON of Session objects, one per line)
+ *   mavis session new [--agent <name>]
+ *                                  (mock) emits {type:"session", ...} + done
  *   mavis session stream --session-id <id> [--dry-run]
  *                                  reads prompts from stdin (one JSON per
  *                                  line: {type:"prompt", text:"..."}) and
  *                                  emits NDJSON events on stdout.
+ *   mavis session switch <id>      (mock) emits contextChanged + done
+ *   mavis code-action run --kind <k> --file <path> --prompt <text>
+ *                                  (mock) emits 1-3 {type:"patch"} or
+ *                                  {type:"text"} events + done
  *   mavis oauth code               (mock) emits {user_code, verification_uri,
  *                                  device_code, interval, expires_in}
  *   mavis oauth token --device-code <dc>  (mock) emits
@@ -104,8 +111,12 @@ async function main() {
         'Usage:',
         '  mavis --version',
         '  mavis agent list',
+        '  mavis agent switch <name>',
         '  mavis session list',
+        '  mavis session new [--agent <name>]',
         '  mavis session stream --session-id <id> [--dry-run]',
+        '  mavis session switch <id>',
+        '  mavis code-action run --kind <k> --file <path> --prompt <text>',
         '  mavis oauth code',
         '  mavis oauth token --device-code <dc>',
         '',
@@ -125,11 +136,23 @@ async function main() {
     if (sub === 'agent' && cmd === 'list') {
       return cmdAgentList();
     }
+    if (sub === 'agent' && cmd === 'switch') {
+      return cmdAgentSwitch();
+    }
     if (sub === 'session' && cmd === 'list') {
       return cmdSessionList();
     }
+    if (sub === 'session' && cmd === 'new') {
+      return cmdSessionNew();
+    }
     if (sub === 'session' && cmd === 'stream') {
       return cmdSessionStream();
+    }
+    if (sub === 'session' && cmd === 'switch') {
+      return cmdSessionSwitch();
+    }
+    if (sub === 'code-action' && cmd === 'run') {
+      return cmdCodeActionRun();
     }
     if (sub === 'oauth' && cmd === 'code') {
       return cmdOauthCode();
@@ -249,6 +272,85 @@ async function cmdSessionStream() {
   }
 
   emit({ type: 'done', sessionId });
+}
+
+function cmdSessionNew() {
+  const agent = arg('--agent') || 'mavis';
+  const id = randomId('sess');
+  const title = `Mock chat #${(nowTs() % 1000).toString().padStart(3, '0')}`;
+  emit({ type: 'session', id, agent, title, createdAt: nowTs() });
+  emit({ type: 'done', count: 1 });
+}
+
+function cmdSessionSwitch() {
+  const id = argv[2];
+  if (!id) {
+    logErr('session switch requires a session id');
+    process.exit(2);
+  }
+  emit({ type: 'contextChanged', sessionId: id, agent: 'mavis' });
+  emit({ type: 'done' });
+}
+
+function cmdAgentSwitch() {
+  const name = argv[2];
+  if (!name) {
+    logErr('agent switch requires an agent name');
+    process.exit(2);
+  }
+  // Agent switch also starts a fresh session under the new agent.
+  const newId = randomId('sess');
+  emit({ type: 'contextChanged', sessionId: newId, agent: name });
+  emit({ type: 'session', id: newId, agent: name, title: 'Mock chat', createdAt: nowTs() });
+  emit({ type: 'done', count: 1 });
+}
+
+function cmdCodeActionRun() {
+  const kind = arg('--kind');
+  const file = arg('--file');
+  const prompt = arg('--prompt') || '';
+  if (!kind || !file) {
+    logErr('code-action run requires --kind and --file');
+    process.exit(2);
+  }
+  if (kind === 'refactor' || kind === 'tests' || kind === 'docstring') {
+    // Emit a mock unified diff that adds a small comment at the bottom
+    // of the file. The shim never actually reads `file`; the TS layer
+    // applies the diff to the document.
+    const diff = [
+      '--- a/' + file,
+      '+++ b/' + file,
+      '@@ -1,1 +1,1 @@',
+      ' // existing content preserved by mock',
+      '+// ' + kind + ' by Mavis (mock, prompt: ' + truncate(prompt, 60) + ')',
+      '',
+    ].join('\n');
+    emit({ type: 'patch', file, diff });
+  } else if (kind === 'explain' || kind === 'bugs') {
+    const text =
+      kind === 'explain'
+        ? 'Mock explanation: this code reads from `' + basename(file) + '` and applies a transformation. (Prompt: ' + truncate(prompt, 60) + ')'
+        : 'Mock bug scan: no critical issues found in `' + basename(file) + '`. (Prompt: ' + truncate(prompt, 60) + ')';
+    emit({ type: 'text', text });
+  } else if (kind === 'custom') {
+    // Custom prompts can be either patch or text; default to text.
+    emit({ type: 'text', text: 'Mock custom response for `' + basename(file) + '`: ' + truncate(prompt, 120) });
+  } else {
+    logErr('unknown code-action kind: ' + kind);
+    process.exit(2);
+  }
+  emit({ type: 'done' });
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function basename(p) {
+  if (!p) return '';
+  const m = p.replace(/\\/g, '/').split('/');
+  return m[m.length - 1] || p;
 }
 
 function cmdOauthCode() {
