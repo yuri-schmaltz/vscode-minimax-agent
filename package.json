@@ -70,6 +70,26 @@
         "command": "mavis.openSettings",
         "title": "Open settings",
         "category": "Mavis"
+      },
+      {
+        "command": "mavis.switchSession",
+        "title": "Switch session",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.switchAgent",
+        "title": "Switch agent",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.listSessions",
+        "title": "List sessions",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.listAgents",
+        "title": "List agents",
+        "category": "Mavis"
       }
     ],
     "viewsContainers": {
@@ -117,6 +137,11 @@
         "key": "ctrl+l",
         "mac": "cmd+l",
         "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "mavis.switchSession",
+        "key": "ctrl+shift+,",
+        "mac": "cmd+shift+,"
       }
     ],
     "configuration": {
