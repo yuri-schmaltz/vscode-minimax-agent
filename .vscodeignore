@@ -1,0 +1,30 @@
+# Source files we don't need in the packaged .vsix
+src/**
+test/**
+**/*.test.ts
+**/*.spec.ts
+**/*.map
+
+# Dev / CI files
+.github/**
+.gitignore
+.vscodeignore
+**/.eslintrc.json
+**/.prettierrc
+**/tsconfig.json
+**/esbuild.config.mjs
+**/jest.config.js
+
+# Docs (link to website from README instead)
+docs/**
+
+# Logs / temp
+**/*.log
+.cache/
+.tmp/
+coverage/
+node_modules/
+
+# The plan file isn't needed in the extension
+vscode-minimax-agent-plan.md
+README_DEV.md
