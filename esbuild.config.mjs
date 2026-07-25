@@ -1,7 +1,8 @@
 // esbuild build config for MiniMax Agent VSCode extension.
-// Builds two bundles:
+// Builds three bundles:
 //   1. Extension host: src/extension.ts -> out/extension.js  (CJS, Node)
-//   2. Webview:        webview/main.tsx -> dist/webview/main.js  (IIFE, browser)
+//   2. Chat webview:   webview/main.tsx -> dist/webview/main.js  (IIFE, browser)
+//   3. Settings webview: webview/settings/main.tsx -> dist/webview/settings/main.js (IIFE, browser)
 //
 // Run: node esbuild.config.mjs
 // Watch: node esbuild.config.mjs --watch
@@ -31,13 +32,11 @@ const extensionConfig = {
   },
 };
 
-const webviewConfig = {
-  entryPoints: [resolve(__dirname, 'webview/main.tsx')],
+const baseWebview = {
   bundle: true,
   format: 'iife',
   platform: 'browser',
   target: 'es2022',
-  outfile: resolve(__dirname, 'dist/webview/main.js'),
   sourcemap: true,
   loader: {
     '.css': 'css',
@@ -52,9 +51,22 @@ const webviewConfig = {
   minify: !isDev,
 };
 
+const webviewConfig = {
+  ...baseWebview,
+  entryPoints: [resolve(__dirname, 'webview/main.tsx')],
+  outfile: resolve(__dirname, 'dist/webview/main.js'),
+};
+
+const settingsConfig = {
+  ...baseWebview,
+  entryPoints: [resolve(__dirname, 'webview/settings/main.tsx')],
+  outfile: resolve(__dirname, 'dist/webview/settings/main.js'),
+};
+
 async function ensureDirs() {
   await mkdir(resolve(__dirname, 'out'), { recursive: true });
   await mkdir(resolve(__dirname, 'dist/webview'), { recursive: true });
+  await mkdir(resolve(__dirname, 'dist/webview/settings'), { recursive: true });
 }
 
 async function copyStaticAssets() {
@@ -65,12 +77,19 @@ async function copyStaticAssets() {
   ).catch(() => {
     /* styles.css is optional in some cycles */
   });
+  await copyFile(
+    resolve(__dirname, 'webview/settings/styles.css'),
+    resolve(__dirname, 'dist/webview/settings/styles.css'),
+  ).catch(() => {
+    /* settings styles are optional in some cycles */
+  });
 }
 
 async function runBuild() {
   await ensureDirs();
   await build(extensionConfig);
   await build(webviewConfig);
+  await build(settingsConfig);
   await copyStaticAssets();
   console.log('[esbuild] build complete');
 }
@@ -79,8 +98,10 @@ async function runWatch() {
   await ensureDirs();
   const ext = await context(extensionConfig);
   const web = await context(webviewConfig);
+  const set = await context(settingsConfig);
   await ext.watch();
   await web.watch();
+  await set.watch();
   await copyStaticAssets();
   console.log('[esbuild] watching...');
 }

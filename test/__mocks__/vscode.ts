@@ -198,6 +198,19 @@ export const window = {
   },
   registerWebviewViewProvider: () => ({ dispose: () => undefined }),
   registerTreeDataProvider: (_id: string, _provider: unknown) => ({ dispose: () => undefined }),
+  createWebviewPanel: (_id: string, _title: string, _options?: unknown, _panelOptions?: unknown) => ({
+    webview: {
+      options: {} as WebviewOptions,
+      html: '',
+      cspSource: 'vscode-webview://test-csp',
+      asWebviewUri: (u: import('vscode').Uri) => u,
+      postMessage: (_m: unknown) => undefined,
+      onDidReceiveMessage: (_l: (m: unknown) => void) => ({ dispose: () => undefined }),
+    } as unknown as Webview,
+    reveal: () => undefined,
+    onDidDispose: () => ({ dispose: () => undefined }),
+    dispose: () => undefined,
+  }),
   withProgress: async (_opts: unknown, task: (progress: { report: (v: unknown) => void }, token: unknown) => Promise<unknown>) => {
     return await task({ report: () => undefined }, { isCancellationRequested: false });
   },
@@ -211,6 +224,9 @@ export const commands = {
 
 export const env = {
   openExternal: async (_uri: unknown) => true,
+  machineId: 'test-machine-id-0000',
+  sessionId: 'test-session-id-0000',
+  language: 'en',
   clipboard: {
     writeText: async (_text: string) => undefined,
   },

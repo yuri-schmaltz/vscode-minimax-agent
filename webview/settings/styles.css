@@ -1,0 +1,140 @@
+/* Mavis settings webview — minimal styles. Inherits VSCode theme variables. */
+:root {
+  color-scheme: light dark;
+  --mavis-fg: var(--vscode-foreground);
+  --mavis-bg: var(--vscode-editor-background);
+  --mavis-fg-muted: var(--vscode-descriptionForeground);
+  --mavis-border: var(--vscode-input-border, var(--vscode-widget-border));
+  --mavis-accent: var(--vscode-button-background);
+  --mavis-accent-fg: var(--vscode-button-foreground);
+  --mavis-input-bg: var(--vscode-input-background);
+  --mavis-error-fg: var(--vscode-errorForeground, #f48771);
+  --mavis-success-fg: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
+}
+
+.mavis-settings-root {
+  padding: 18px 22px;
+  max-width: 720px;
+  font-family: var(--vscode-font-family, system-ui);
+  color: var(--mavis-fg);
+  background: var(--mavis-bg);
+}
+
+.mavis-settings-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 18px 0;
+  border-bottom: 1px solid var(--mavis-border);
+  padding-bottom: 10px;
+}
+
+.mavis-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mavis-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mavis-settings-field label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.mavis-settings-field label span {
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.mavis-settings-field input[type="text"],
+.mavis-settings-field select {
+  background: var(--mavis-input-bg);
+  color: var(--mavis-fg);
+  border: 1px solid var(--mavis-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: var(--vscode-font-family, system-ui);
+}
+
+.mavis-settings-field input[type="text"][readonly] {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.mavis-settings-field input[type="text"]:focus,
+.mavis-settings-field select:focus {
+  outline: 1px solid var(--mavis-accent);
+  outline-offset: 1px;
+}
+
+.mavis-settings-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mavis-settings-row input[type="text"] {
+  flex: 1;
+}
+
+.mavis-settings-help {
+  margin: 0;
+  color: var(--mavis-fg-muted);
+  font-size: 12px;
+}
+
+.mavis-settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--mavis-border);
+}
+
+.mavis-settings-actions button {
+  background: var(--mavis-accent);
+  color: var(--mavis-accent-fg);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mavis-settings-actions button:hover {
+  filter: brightness(1.08);
+}
+
+.mavis-settings-discard {
+  background: transparent !important;
+  color: var(--mavis-fg) !important;
+  border: 1px solid var(--mavis-border) !important;
+}
+
+.mavis-settings-status {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mavis-success-fg) 15%, transparent);
+  color: var(--mavis-fg);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.mavis-settings-invalid {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mavis-error-fg) 20%, transparent);
+  color: var(--mavis-fg);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.mavis-settings-loading {
+  padding: 30px;
+  color: var(--mavis-fg-muted);
+  text-align: center;
+}
