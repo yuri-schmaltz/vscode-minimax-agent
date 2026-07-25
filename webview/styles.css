@@ -1,0 +1,224 @@
+/* Mavis chat webview — minimal styles. Inherits VSCode theme variables. */
+:root {
+  color-scheme: light dark;
+  --mavis-fg: var(--vscode-foreground);
+  --mavis-bg: var(--vscode-editor-background);
+  --mavis-border: var(--vscode-editorWidget-border, var(--vscode-input-border));
+  --mavis-input-bg: var(--vscode-input-background);
+  --mavis-accent: var(--vscode-button-background);
+  --mavis-accent-fg: var(--vscode-button-foreground);
+  --mavis-user-bg: var(--vscode-textBlockQuote-background, rgba(99, 102, 241, 0.08));
+  --mavis-assistant-bg: transparent;
+  --mavis-system-fg: var(--vscode-descriptionForeground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+.mavis-root {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  background: var(--mavis-bg);
+  color: var(--mavis-fg);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.45;
+}
+
+.mavis-root {
+  display: flex;
+  flex-direction: column;
+}
+
+.mavis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--mavis-border);
+  background: var(--vscode-sideBar-background, var(--mavis-bg));
+}
+
+.mavis-header-left,
+.mavis-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mavis-agent {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.mavis-session-id {
+  background: transparent;
+  border: 1px solid var(--mavis-border);
+  color: var(--mavis-fg);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mavis-session-id:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
+}
+
+.mavis-header-right button {
+  background: transparent;
+  border: 1px solid var(--mavis-border);
+  color: var(--mavis-fg);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mavis-header-right button:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
+}
+
+.mavis-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.mavis-empty {
+  text-align: center;
+  margin-top: 24px;
+  color: var(--mavis-system-fg);
+}
+
+.mavis-empty h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--mavis-fg);
+}
+
+.mavis-empty-tip {
+  font-size: 11px;
+  margin-top: 12px;
+  opacity: 0.7;
+}
+
+.mavis-error {
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #fecaca;
+}
+
+.mavis-msg {
+  margin-bottom: 10px;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.mavis-msg-user {
+  background: var(--mavis-user-bg);
+  border: 1px solid var(--mavis-border);
+}
+
+.mavis-msg-assistant {
+  background: var(--mavis-assistant-bg);
+  border: 1px solid transparent;
+}
+
+.mavis-msg-system {
+  font-size: 11px;
+  color: var(--mavis-system-fg);
+  font-style: italic;
+}
+
+.mavis-msg-tool {
+  font-size: 11px;
+  color: var(--mavis-system-fg);
+}
+
+.mavis-msg-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mavis-system-fg);
+  margin-bottom: 4px;
+}
+
+.mavis-msg-body pre {
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.25));
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.mavis-msg-body code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+
+.mavis-msg-body p {
+  margin: 0 0 6px 0;
+}
+
+.mavis-msg-body p:last-child {
+  margin-bottom: 0;
+}
+
+.mavis-msg-plain {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: inherit;
+}
+
+.mavis-footer {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  border-top: 1px solid var(--mavis-border);
+  padding: 8px 10px;
+  background: var(--vscode-sideBar-background, var(--mavis-bg));
+}
+
+.mavis-footer textarea {
+  flex: 1 1 auto;
+  resize: vertical;
+  min-height: 32px;
+  max-height: 160px;
+  background: var(--mavis-input-bg);
+  color: var(--mavis-fg);
+  border: 1px solid var(--mavis-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.mavis-footer textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--mavis-accent));
+  outline-offset: -1px;
+}
+
+.mavis-send {
+  background: var(--mavis-accent);
+  color: var(--mavis-accent-fg);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mavis-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
