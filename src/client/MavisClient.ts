@@ -22,6 +22,11 @@ import {
   CodeActionKind,
   CodeActionResult,
   CodeActionTaskHandle,
+  CronInput,
+  CronSummary,
+  DriveCategory,
+  DriveFile,
+  DriveItem,
   PromptMessage,
   SessionSummary,
   StreamEvent,
@@ -104,6 +109,10 @@ export class MavisClient {
   readonly onSessionCreated = new EventEmitter();
   /** Fires after the active session id is updated (alias of contextChanged 'session'). */
   readonly onSessionSwitched = new EventEmitter();
+  /** Fires when the Drive contents change (after listDrive, getDriveFile, deleteDriveFile). */
+  readonly onDriveChanged = new EventEmitter();
+  /** Fires when the cron list changes (after listCrons, createCron, deleteCron, enable/disable). */
+  readonly onCronChanged = new EventEmitter();
 
   private activeAgent: string;
   private activeSession: string | undefined;
@@ -453,6 +462,257 @@ export class MavisClient {
     };
   }
 
+  // ---------------------------------------------------------- Drive (Fase 4)
+
+  /**
+   * Spawns `mavis drive list [--category <cat>]` and resolves to the list
+   * of {@link DriveItem}s. Emits `onDriveChanged` when the call completes
+   * successfully so tree views can refresh.
+   */
+  async listDrive(category?: DriveCategory): Promise<DriveItem[]> {
+    const args = ['drive', 'list'];
+    if (category) args.push('--category', category);
+    const items = await this.runList<DriveItem>(args);
+    this.onDriveChanged.emit('list', { category, items });
+    return items;
+  }
+
+  /**
+   * Spawns `mavis drive get <id>` and resolves to the {@link DriveFile}
+   * detail row. Emits `onDriveChanged` for the `'get'` event when done.
+   */
+  async getDriveFile(id: string): Promise<DriveFile> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (!id || typeof id !== 'string') {
+      throw new Error('getDriveFile: id is required');
+    }
+    const bin = this.resolveBinary();
+    return new Promise<DriveFile>((resolve, reject) => {
+      const child = this.spawnImpl(bin, ['drive', 'get', id], this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let resolvedFile: DriveFile | undefined;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string } & Partial<DriveFile>) => {
+        if (!row || typeof row !== 'object') return;
+        if (row.type === 'file' && typeof (row as Partial<DriveFile>).id === 'string') {
+          const r = row as DriveFile;
+          resolvedFile = {
+            id: r.id,
+            name: r.name,
+            category: r.category,
+            sizeBytes: r.sizeBytes,
+            mimeType: r.mimeType,
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+            url: r.url,
+            content: r.content,
+            contentIsBase64: r.contentIsBase64,
+          };
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (resolvedFile) {
+          this.onDriveChanged.emit('get', { id, file: resolvedFile });
+          resolve(resolvedFile);
+        } else {
+          reject(new Error(`mavis drive get ${id} exited (code=${code}) without a file row`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Spawns `mavis drive delete <id>` and resolves when the shim emits a
+   * `deleted` row. Emits `onDriveChanged` for the `'delete'` event so the
+   * tree can refresh.
+   */
+  async deleteDriveFile(id: string): Promise<void> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (!id || typeof id !== 'string') {
+      throw new Error('deleteDriveFile: id is required');
+    }
+    const bin = this.resolveBinary();
+    await new Promise<void>((resolve, reject) => {
+      const child = this.spawnImpl(bin, ['drive', 'delete', id], this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let deleted = false;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string; id?: string }) => {
+        if (row && row.type === 'deleted' && row.id === id) {
+          deleted = true;
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (deleted || code === 0 || code === null) {
+          this.onDriveChanged.emit('delete', { id });
+          resolve();
+        } else {
+          reject(new Error(`mavis drive delete ${id} exited (code=${code}) without a deleted row`));
+        }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------- Cron (Fase 4)
+
+  /** Spawns `mavis cron list` and resolves to the list of {@link CronSummary}s. */
+  async listCrons(): Promise<CronSummary[]> {
+    const items = await this.runList<CronSummary>(['cron', 'list']);
+    this.onCronChanged.emit('list', { items });
+    return items;
+  }
+
+  /**
+   * Spawns `mavis cron create` with the supplied args and resolves to
+   * the created {@link CronSummary} row.
+   */
+  async createCron(input: CronInput): Promise<CronSummary> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (!input || typeof input !== 'object') {
+      throw new Error('createCron: input is required');
+    }
+    if (!input.name || !input.schedule || !input.prompt) {
+      throw new Error('createCron: name, schedule and prompt are required');
+    }
+    const bin = this.resolveBinary();
+    const args = [
+      'cron', 'create',
+      '--name', input.name,
+      '--schedule', input.schedule,
+      '--prompt', input.prompt,
+      '--agent', input.agent || this.activeAgent,
+    ];
+    if (input.enabled === false) args.push('--disabled');
+    return new Promise<CronSummary>((resolve, reject) => {
+      const child = this.spawnImpl(bin, args, this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let created: CronSummary | undefined;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string } & Partial<CronSummary>) => {
+        if (row && row.type === 'cron' && typeof (row as Partial<CronSummary>).id === 'string') {
+          const r = row as CronSummary;
+          created = {
+            id: r.id,
+            name: r.name,
+            schedule: r.schedule,
+            prompt: r.prompt,
+            agent: r.agent,
+            enabled: r.enabled !== false,
+            lastRunAt: r.lastRunAt,
+            nextRunAt: r.nextRunAt,
+            createdAt: r.createdAt,
+          };
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (created) {
+          this.onCronChanged.emit('create', { cron: created });
+          resolve(created);
+        } else {
+          reject(new Error(`mavis cron create exited (code=${code}) without a cron row`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Spawns `mavis cron delete <id>` and resolves when the shim emits a
+   * `deleted` row. Emits `onCronChanged` for the `'delete'` event.
+   */
+  async deleteCron(id: string): Promise<void> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (!id || typeof id !== 'string') {
+      throw new Error('deleteCron: id is required');
+    }
+    const bin = this.resolveBinary();
+    await new Promise<void>((resolve, reject) => {
+      const child = this.spawnImpl(bin, ['cron', 'delete', id], this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let deleted = false;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string; id?: string }) => {
+        if (row && row.type === 'deleted' && row.id === id) deleted = true;
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (deleted || code === 0 || code === null) {
+          this.onCronChanged.emit('delete', { id });
+          resolve();
+        } else {
+          reject(new Error(`mavis cron delete ${id} exited (code=${code}) without a deleted row`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Spawns `mavis cron enable <id>` (or `disable`) and resolves when the
+   * shim echoes the updated cron row. Emits `onCronChanged` for
+   * `'enable'` or `'disable'`.
+   */
+  async enableCron(id: string, enabled: boolean): Promise<CronSummary> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (!id || typeof id !== 'string') {
+      throw new Error('enableCron: id is required');
+    }
+    const bin = this.resolveBinary();
+    const args = ['cron', enabled ? 'enable' : 'disable', id];
+    return new Promise<CronSummary>((resolve, reject) => {
+      const child = this.spawnImpl(bin, args, this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let updated: CronSummary | undefined;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string } & Partial<CronSummary>) => {
+        if (row && row.type === 'cron' && typeof (row as Partial<CronSummary>).id === 'string') {
+          const r = row as CronSummary;
+          updated = {
+            id: r.id,
+            name: r.name,
+            schedule: r.schedule,
+            prompt: r.prompt,
+            agent: r.agent,
+            enabled: r.enabled !== false,
+            lastRunAt: r.lastRunAt,
+            nextRunAt: r.nextRunAt,
+            createdAt: r.createdAt,
+          };
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (updated) {
+          this.onCronChanged.emit(enabled ? 'enable' : 'disable', { cron: updated });
+          resolve(updated);
+        } else {
+          reject(new Error(`mavis cron ${enabled ? 'enable' : 'disable'} ${id} exited (code=${code}) without a cron row`));
+        }
+      });
+    });
+  }
+
+  /** Convenience helper: disables a cron. Same as `enableCron(id, false)`. */
+  disableCron(id: string): Promise<CronSummary> {
+    return this.enableCron(id, false);
+  }
+
   /** Tears down all running streams. Idempotent. */
   dispose(): void {
     if (this.disposed) return;
@@ -479,6 +739,8 @@ export class MavisClient {
     this.onContextChanged.removeAllListeners();
     this.onSessionCreated.removeAllListeners();
     this.onSessionSwitched.removeAllListeners();
+    this.onDriveChanged.removeAllListeners();
+    this.onCronChanged.removeAllListeners();
   }
 
   // ------------------------------------------------------------------ internals
