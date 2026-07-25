@@ -471,7 +471,7 @@ without a real archon-server.
 
 **Date**: 2026-07-25
 **Branch**: `main`
-**HEAD commit**: `0c66c06` (`test: add shim CLI drive/cron tests and chat attachment tests`)
+**HEAD commit**: `26cfc72` (`docs: deliverable.md cycle 3 section (drive + cron)`)
 **Build**: PASS — lint, typecheck, secret-leak audit, 229/229 tests, package all green
 **Tests**: 229/229 passing (cycle 2: 144/144, +85 cycle 3 tests)
 **Coverage**: 91.03% stmts / 79.95% branches / 92.47% functions
