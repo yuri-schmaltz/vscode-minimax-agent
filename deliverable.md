@@ -422,7 +422,7 @@ without a real archon-server.
 **VEREDITO FINAL: PASS**
 
 - **Branch**: `main`
-- **HEAD commit**: <filled after commit>
+- **HEAD commit**: `07d8383` (`docs: deliverable.md cycle 2 section (sessoes + code actions)`)
 - **Build**: PASS — lint, typecheck, 144/144 tests, package all green
 - **Tests**: 144/144 passing (cycle 1: 97/97, +47 cycle 2 tests)
 - **Coverage**: pending — should remain >= 80% stmts / 75% branches
