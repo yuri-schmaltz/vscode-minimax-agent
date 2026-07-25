@@ -168,3 +168,235 @@ test('setActiveAgent fires contextChanged', () => {
   assert.equal(c.getActiveAgent(), 'mavis-coder');
   c.dispose();
 });
+
+test('setActiveSession fires contextChanged and onSessionSwitched', () => {
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(makeFakeChild()),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  let ctxSession: string | undefined;
+  let switched: string | undefined;
+  c.onContextChanged.on('session', (s: string | undefined) => (ctxSession = s));
+  c.onSessionSwitched.on('session', ((id: string) => (switched = id)) as unknown as (...args: unknown[]) => void);
+  c.setActiveSession('sess_xyz');
+  assert.equal(ctxSession, 'sess_xyz');
+  assert.equal(switched, 'sess_xyz');
+  assert.equal(c.getActiveSession(), 'sess_xyz');
+  c.dispose();
+});
+
+test('setActiveSession is a no-op when id is unchanged', () => {
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(makeFakeChild()),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  c.setActiveSession('sess_abc');
+  let count = 0;
+  c.onContextChanged.on('session', () => count++);
+  c.setActiveSession('sess_abc');
+  assert.equal(count, 0);
+  c.dispose();
+});
+
+test('createSession parses the {type:"session"} event and resolves', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'session', id: 'sess_new', agent: 'mavis', title: 'hi', createdAt: 1234 }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done', count: 1 }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const created = await c.createSession('mavis');
+  assert.equal(created.id, 'sess_new');
+  assert.equal(created.agent, 'mavis');
+  assert.equal(created.title, 'hi');
+  assert.equal(created.createdAt, 1234);
+  c.dispose();
+});
+
+test('createSession fires onSessionCreated', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  let received: { id: string; agent: string } | undefined;
+  c.onSessionCreated.on('session', ((e: unknown) => {
+    const r = e as { id: string; agent: string };
+    received = { id: r.id, agent: r.agent };
+  }) as unknown as (...args: unknown[]) => void);
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'session', id: 'sess_event', agent: 'mavis', title: '', createdAt: 0 }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  await c.createSession();
+  assert.ok(received, 'expected onSessionCreated to fire');
+  assert.equal(received!.id, 'sess_event');
+  assert.equal(received!.agent, 'mavis');
+  c.dispose();
+});
+
+test('createSession defaults the agent to the active agent when none provided', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+    defaultAgent: 'mavis-coder',
+  });
+  let receivedAgent: string | undefined;
+  c.onSessionCreated.on('session', ((e: unknown) => {
+    receivedAgent = (e as { agent: string }).agent;
+  }) as unknown as (...args: unknown[]) => void);
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'session', id: 'sess_x', agent: 'mavis-coder', title: '', createdAt: 0 }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const created = await c.createSession();
+  assert.equal(created.agent, 'mavis-coder');
+  assert.equal(receivedAgent, 'mavis-coder');
+  c.dispose();
+});
+
+test('createSession rejects when the shim exits without a session row', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  await assert.rejects(() => c.createSession(), /without a session row/);
+  c.dispose();
+});
+
+test('switchSession emits contextChanged and resolves with the new id', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  let agent: string | undefined;
+  let session: string | undefined;
+  c.onContextChanged.on('agent', (a: string) => (agent = a));
+  c.onContextChanged.on('session', (s: string | undefined) => (session = s));
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'contextChanged', sessionId: 'sess_sw', agent: 'mavis-coder' }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const id = await c.switchSession('sess_sw');
+  assert.equal(id, 'sess_sw');
+  assert.equal(agent, 'mavis-coder');
+  assert.equal(session, 'sess_sw');
+  c.dispose();
+});
+
+test('switchSession is a no-op when id is unchanged', async () => {
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(makeFakeChild()),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  c.setActiveSession('sess_same');
+  // Second call must not spawn anything (no events to assert on here,
+  // but the no-op path returns the id without a child process).
+  const id = await c.switchSession('sess_same');
+  assert.equal(id, 'sess_same');
+  c.dispose();
+});
+
+test('switchAgent sets the active agent and creates a new session', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+    defaultAgent: 'mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'session', id: 'sess_newagent', agent: 'mavis-coder', title: '', createdAt: 0 }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const session = await c.switchAgent('mavis-coder');
+  assert.equal(session.id, 'sess_newagent');
+  assert.equal(session.agent, 'mavis-coder');
+  assert.equal(c.getActiveAgent(), 'mavis-coder');
+  c.dispose();
+});
+
+test('createCodeActionTask resolves with a patch for "refactor"', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'patch', file: 'foo.ts', diff: '--- a\n+++ b\n@@\n+// ok\n' }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const task = c.createCodeActionTask('refactor', 'fix it', 'foo.ts');
+  const result = await task.result;
+  assert.equal(result.kind, 'patch');
+  if (result.kind === 'patch') {
+    assert.equal(result.file, 'foo.ts');
+    assert.match(result.diff, /\/\/ ok/);
+  }
+  c.dispose();
+});
+
+test('createCodeActionTask resolves with a text result for "explain"', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'text', text: 'this does X' }) + '\n');
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const task = c.createCodeActionTask('explain', 'why', 'bar.ts');
+  const result = await task.result;
+  assert.equal(result.kind, 'text');
+  if (result.kind === 'text') {
+    assert.match(result.text, /this does X/);
+  }
+  c.dispose();
+});
+
+test('createCodeActionTask rejects when no result row is emitted', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  setImmediate(() => {
+    child.stdout.push(JSON.stringify({ type: 'done' }) + '\n');
+    child.emitter.emit('close', 0);
+  });
+  const task = c.createCodeActionTask('refactor', 'x', 'foo.ts');
+  await assert.rejects(() => task.result, /without a result row/);
+  c.dispose();
+});
+
+test('createCodeActionTask.cancel() is idempotent', async () => {
+  const child = makeFakeChild();
+  const c = new MavisClient({
+    spawnImpl: makeSpawner(child),
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  const task = c.createCodeActionTask('refactor', 'x', 'foo.ts');
+  assert.doesNotThrow(() => {
+    task.cancel();
+    task.cancel();
+    task.cancel();
+  });
+  c.dispose();
+});
