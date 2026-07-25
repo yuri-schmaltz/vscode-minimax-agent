@@ -4,6 +4,9 @@ test/**
 **/*.test.ts
 **/*.spec.ts
 **/*.map
+# Webview sources (we ship the built bundle in dist/webview)
+webview/**
+dist/**/*.map
 
 # Dev / CI files
 .github/**

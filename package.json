@@ -1,0 +1,197 @@
+{
+  "name": "vscode-agent",
+  "displayName": "MiniMax Agent",
+  "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.",
+  "version": "0.1.0",
+  "publisher": "minimax",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yuri-schmaltz/vscode-minimax-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yuri-schmaltz/vscode-minimax-agent/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "Programming",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "mavis",
+    "minimax",
+    "agent",
+    "ai",
+    "chat",
+    "assistant"
+  ],
+  "main": "out/extension.js",
+  "icon": "resources/icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "mavis.hello",
+        "title": "Hello",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.signIn",
+        "title": "Sign in",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.signOut",
+        "title": "Sign out",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.newChat",
+        "title": "New chat",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.sendSelection",
+        "title": "Send selection to chat",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.toggleChat",
+        "title": "Toggle chat",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.openSettings",
+        "title": "Open settings",
+        "category": "Mavis"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mavis-chat",
+          "title": "MiniMax Agent",
+          "icon": "resources/mavis-icon.svg"
+        }
+      ],
+      "auxiliarybar": [
+        {
+          "id": "mavis-drive",
+          "title": "Mavis Drive",
+          "icon": "resources/mavis-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "mavis-chat": [
+        {
+          "id": "mavis.chatView",
+          "name": "Chat",
+          "type": "webview",
+          "contextualTitle": "MiniMax Agent",
+          "when": "true"
+        }
+      ],
+      "mavis-drive": [
+        {
+          "id": "mavis.driveView",
+          "name": "Drive",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "mavis.toggleChat",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      },
+      {
+        "command": "mavis.sendSelection",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "MiniMax Agent",
+      "type": "object",
+      "properties": {
+        "mavis.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override path to the `mavis` CLI binary. If empty, uses the bundled shim."
+        },
+        "mavis.cliVersion": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Bundled CLI version (shown in the status bar). Defaults to the bundled shim's `package.json` version."
+        },
+        "mavis.defaultAgent": {
+          "type": "string",
+          "default": "mavis",
+          "markdownDescription": "Which agent to spawn by default when starting a new chat."
+        },
+        "mavis.telemetry": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt-in anonymous usage telemetry. **Default: off** — no events are collected unless you explicitly enable this."
+        },
+        "mavis.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the model used for completions. Empty means 'use server default'."
+        },
+        "mavis.oauthFlow": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "deviceCode",
+            "pkce"
+          ],
+          "default": "auto",
+          "markdownDescription": "OAuth flow to use for sign-in. `auto` probes `/.well-known/oauth-config.json` first; falls back to device-code."
+        },
+        "mavis.archonUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the archon-server base URL. Empty means use the default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "npm run build && vsce package",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx $(find test -name '*.test.ts' | tr '\\n' ' ')",
+    "pretest": "npm run typecheck && npm run lint"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "shiki": "^1.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vscode/vsce": "^2.32.0",
+    "esbuild": "^0.23.1",
+    "eslint": "^8.57.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
