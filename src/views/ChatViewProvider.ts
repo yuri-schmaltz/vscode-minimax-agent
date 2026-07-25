@@ -38,7 +38,29 @@ export type WebviewToHost =
   | { type: 'copyToClipboard'; text: string }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'closeTab'; sessionId: string }
-  | { type: 'injectAssistantMessage'; text: string };
+  | { type: 'injectAssistantMessage'; text: string }
+  | { type: 'addAttachment'; attachment: Attachment }
+  | { type: 'removeAttachment'; id: string };
+
+/** A pending attachment shown as a chip above the chat textarea. */
+export interface Attachment {
+  /** Local id used as the React key + removal handle. */
+  id: string;
+  /** Human label (filename or item name). */
+  name: string;
+  /**
+   * Source kind:
+   *   - 'os': a file dropped from the OS file explorer (local path).
+   *   - 'drive': an item dragged from the Mavis Drive tree.
+   */
+  source: 'os' | 'drive';
+  /** Local file path (set when source === 'os'). */
+  path?: string;
+  /** Drive item id (set when source === 'drive'). */
+  driveId?: string;
+  /** MIME type if known. */
+  mimeType?: string;
+}
 
 export type HostToWebview =
   | { type: 'sessionChanged'; session: { id: string; agent: string } | null }
@@ -46,7 +68,8 @@ export type HostToWebview =
   | { type: 'assistantMessage'; delta: { text: string; sessionId: string; ts: number; done?: boolean } }
   | { type: 'error'; message: string }
   | { type: 'history'; messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }> }
-  | { type: 'tabs'; tabs: Array<{ id: string; agent: string; title: string; active: boolean }> };
+  | { type: 'tabs'; tabs: Array<{ id: string; agent: string; title: string; active: boolean }> }
+  | { type: 'attachments'; attachments: Attachment[] };
 
 export interface ChatViewDeps {
   client: MavisClient;
@@ -68,6 +91,7 @@ export class ChatViewProvider implements WebviewViewProvider {
   private currentHandle: StreamHandle | undefined;
   private currentSession: { id: string; agent: string } | undefined;
   private boundSessionListener = false;
+  private attachments: Attachment[] = [];
 
   constructor(
     private readonly context: ExtensionContext,
@@ -150,6 +174,100 @@ export class ChatViewProvider implements WebviewViewProvider {
     this.postToWebview({ type: 'tabs', tabs });
   }
 
+  /**
+   * Adds an attachment (called by the host when files are dropped on the
+   * webview). Returns the resulting attachment for tests.
+   */
+  addAttachment(attachment: Attachment): Attachment {
+    // Dedupe by id (for drive items) or by path (for OS files).
+    const existingIdx = this.attachments.findIndex((a) =>
+      a.id === attachment.id || (a.path && attachment.path && a.path === attachment.path),
+    );
+    if (existingIdx >= 0) {
+      this.attachments[existingIdx] = attachment;
+    } else {
+      this.attachments.push(attachment);
+    }
+    this.broadcastAttachments();
+    return attachment;
+  }
+
+  /** Removes an attachment by id. Returns true if removed. */
+  removeAttachment(id: string): boolean {
+    const before = this.attachments.length;
+    this.attachments = this.attachments.filter((a) => a.id !== id);
+    const removed = this.attachments.length < before;
+    if (removed) this.broadcastAttachments();
+    return removed;
+  }
+
+  /** Returns a snapshot of the current attachments (for tests). */
+  getAttachments(): Attachment[] {
+    return this.attachments.slice();
+  }
+
+  /**
+   * Handles a raw drag-and-drop event from the webview. The webview
+   * pre-parses OS file paths; Drive items arrive as `{file:<id>:<name>}`
+   * payloads produced by the Drive view's drag controller.
+   */
+  handleDroppedFiles(payloads: Array<{ name: string; path?: string; payload?: string; mimeType?: string }>): Attachment[] {
+    const added: Attachment[] = [];
+    for (const p of payloads) {
+      const m = typeof p.payload === 'string' ? /^\{file:([^:}]+):([^:}]+)\}$/.exec(p.payload) : null;
+      if (m) {
+        added.push(this.addAttachment({
+          id: `att_drive_${m[1]}`,
+          name: p.name || m[2],
+          source: 'drive',
+          driveId: m[1],
+        }));
+        continue;
+      }
+      if (p.path) {
+        const fileName = p.name || p.path.split(/[\\/]/).pop() || p.path;
+        added.push(this.addAttachment({
+          id: `att_os_${p.path}_${added.length}`,
+          name: fileName,
+          source: 'os',
+          path: p.path,
+          mimeType: p.mimeType,
+        }));
+        continue;
+      }
+      // Unknown payload — surface as a text chip.
+      added.push(this.addAttachment({
+        id: `att_text_${added.length}_${Date.now().toString(36)}`,
+        name: p.name || 'attachment',
+        source: 'os',
+        mimeType: p.mimeType,
+      }));
+    }
+    return added;
+  }
+
+  /** Push the current attachments list to the webview. */
+  broadcastAttachments(): void {
+    this.postToWebview({ type: 'attachments', attachments: this.attachments.slice() });
+  }
+
+  /**
+   * Returns the attachments formatted as text appended to a prompt
+   * (e.g. `[file: name1 (id1), name2 (path2)]`). The webview sends its
+   * own markup; this is a host-side helper for forwarding to a stream
+   * when needed.
+   */
+  formatAttachmentsForPrompt(): string {
+    if (this.attachments.length === 0) return '';
+    return this.attachments
+      .map((a) => {
+        if (a.source === 'drive' && a.driveId) return `{file:${a.driveId}:${a.name}}`;
+        if (a.path) return `${a.path}`;
+        return a.name;
+      })
+      .join(', ');
+  }
+
   /** Programmatic helper for the host: announce a new session. */
   setSession(sessionId: string, agent: string): void {
     this.currentSession = { id: sessionId, agent };
@@ -218,6 +336,14 @@ export class ChatViewProvider implements WebviewViewProvider {
       }
       case 'injectAssistantMessage': {
         this.injectAssistantMessage(msg.text);
+        return;
+      }
+      case 'addAttachment': {
+        this.addAttachment(msg.attachment);
+        return;
+      }
+      case 'removeAttachment': {
+        this.removeAttachment(msg.id);
         return;
       }
     }
