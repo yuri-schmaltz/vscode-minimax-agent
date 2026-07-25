@@ -1,0 +1,13 @@
+{
+  "name": "mavis-cli-shim",
+  "version": "0.1.0",
+  "description": "Mock shim for the mavis CLI. Emits NDJSON that the VSCode extension consumes.",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "mavis": "./mavis.cjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
