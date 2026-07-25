@@ -61,3 +61,25 @@ export interface StreamHandle {
   on(event: ClientEvent, listener: (e: StreamEvent) => void): () => void;
   off(event: ClientEvent, listener: (e: StreamEvent) => void): void;
 }
+
+/** Code action kinds. */
+export type CodeActionKind =
+  | 'explain'
+  | 'refactor'
+  | 'tests'
+  | 'docstring'
+  | 'bugs'
+  | 'custom';
+
+/** Result of a code action. */
+export type CodeActionResult =
+  | { kind: 'patch'; file: string; diff: string }
+  | { kind: 'text'; text: string };
+
+/** Handle returned by `createCodeActionTask`. */
+export interface CodeActionTaskHandle {
+  /** Resolves when the action completes (success or error). */
+  result: Promise<CodeActionResult>;
+  /** Cancels the underlying child. Idempotent. */
+  cancel(): void;
+}

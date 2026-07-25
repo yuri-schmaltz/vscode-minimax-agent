@@ -19,6 +19,9 @@ import { redactString } from '../util/redact';
 import {
   AgentSummary,
   ClientEvent,
+  CodeActionKind,
+  CodeActionResult,
+  CodeActionTaskHandle,
   PromptMessage,
   SessionSummary,
   StreamEvent,
@@ -97,6 +100,10 @@ export class MavisClient {
   readonly onSessionsChanged = new EventEmitter();
   /** Fires when the active agent or session changes (UI hook). */
   readonly onContextChanged = new EventEmitter();
+  /** Fires immediately after a new session is created via createSession(). */
+  readonly onSessionCreated = new EventEmitter();
+  /** Fires after the active session id is updated (alias of contextChanged 'session'). */
+  readonly onSessionSwitched = new EventEmitter();
 
   private activeAgent: string;
   private activeSession: string | undefined;
@@ -158,6 +165,57 @@ export class MavisClient {
     if (sessionId === this.activeSession) return;
     this.activeSession = sessionId;
     this.onContextChanged.emit('session', sessionId);
+    this.onSessionSwitched.emit('session', sessionId as string);
+  }
+
+  /**
+   * Spawns `mavis session new [--agent <name>]` and resolves with the new
+   * session summary. Emits `onSessionCreated` once the spawn is successful
+   * and the first `{type:"session"}` event has been parsed.
+   *
+   * The shim emits a `session` row followed by a `done` sentinel. The
+   * list parser already filters sentinels, so the raw parser here only
+   * needs to pick the first data row.
+   */
+  async createSession(agent?: string): Promise<SessionSummary> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    const bin = this.resolveBinary();
+    const args: string[] = ['session', 'new'];
+    const effectiveAgent = agent ?? this.activeAgent;
+    if (effectiveAgent) {
+      args.push('--agent', effectiveAgent);
+    }
+    return new Promise<SessionSummary>((resolve, reject) => {
+      const child = this.spawnImpl(bin, args, this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let resolved: SessionSummary | undefined;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string } & SessionSummary) => {
+        if (row && typeof row === 'object' && (row as { type?: string }).type === 'session') {
+          if (!resolved) {
+            const session: SessionSummary = {
+              id: (row as SessionSummary).id,
+              agent: (row as SessionSummary).agent || effectiveAgent,
+              title: (row as SessionSummary).title || '',
+              createdAt: (row as SessionSummary).createdAt || Date.now(),
+            };
+            resolved = session;
+            this.onSessionCreated.emit('session', session as never);
+          }
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (resolved) {
+          resolve(resolved);
+        } else {
+          reject(new Error(`mavis session new exited (code=${code}) without a session row`));
+        }
+      });
+    });
   }
 
   /**
@@ -267,6 +325,134 @@ export class MavisClient {
     return this.runList<AgentSummary>(['agent', 'list']);
   }
 
+  /**
+   * Switches the active context to a different session/agent via the
+   * shim. Emits `onContextChanged` for both session and agent (when
+   * applicable) so any UI (status bar, chat view, code actions) can
+   * react. Resolves to the resulting session id.
+   */
+  async switchSession(sessionId: string): Promise<string | undefined> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    if (sessionId === this.activeSession) return sessionId;
+    const bin = this.resolveBinary();
+    return new Promise<string | undefined>((resolve, reject) => {
+      const child = this.spawnImpl(bin, ['session', 'switch', sessionId], this.spawnEnv()) as ChildProcessWithoutNullStreams;
+      let switched: string | undefined;
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      parser.on('data', (row: { type?: string; sessionId?: string; agent?: string }) => {
+        if (row && row.type === 'contextChanged') {
+          if (row.agent) this.setActiveAgent(row.agent);
+          if (row.sessionId) {
+            this.setActiveSession(row.sessionId);
+            switched = row.sessionId;
+          }
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        // Treat close(0) as success even if the shim didn't emit
+        // contextChanged — fall back to applying the requested id
+        // optimistically so the UI stays consistent.
+        if (code === 0 || code === null) {
+          if (!switched) this.setActiveSession(sessionId);
+          resolve(switched ?? sessionId);
+        } else {
+          reject(new Error(`mavis session switch exited (code=${code})`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Switches the active agent. Spawns a session new under the new agent
+   * and resolves to the resulting session id. Also fires
+   * `onContextChanged` for the agent change.
+   */
+  async switchAgent(agent: string): Promise<SessionSummary> {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    this.setActiveAgent(agent);
+    return this.createSession(agent);
+  }
+
+  /**
+   * Spawns `mavis code-action run --kind <k> --file <path> --prompt <text>`.
+   * Resolves with a {@link CodeActionResult} when the shim emits a
+   * `patch` or `text` event. The returned handle exposes a `cancel()` to
+   * kill the underlying child.
+   */
+  createCodeActionTask(kind: CodeActionKind, prompt: string, file: string): CodeActionTaskHandle {
+    if (this.disposed) throw new Error('MavisClient is disposed');
+    const bin = this.resolveBinary();
+    const args = [
+      'code-action',
+      'run',
+      '--kind',
+      kind,
+      '--file',
+      file,
+      '--prompt',
+      prompt,
+    ];
+    const child = this.spawnImpl(bin, args, this.spawnEnv()) as ChildProcessWithoutNullStreams;
+    let done = false;
+    const resultPromise = new Promise<CodeActionResult>((resolve, reject) => {
+      const parser = new NDJSONParser();
+      child.stdout.pipe(parser);
+      let first: CodeActionResult | undefined;
+      parser.on('data', (row: { type?: string } & Partial<CodeActionResult>) => {
+        if (done) return;
+        if (!row || typeof row !== 'object' || !('type' in row)) return;
+        if (row.type === 'patch' && typeof (row as { diff?: unknown }).diff === 'string' && typeof (row as { file?: unknown }).file === 'string') {
+          first = {
+            kind: 'patch',
+            file: (row as { file: string }).file,
+            diff: (row as { diff: string }).diff,
+          };
+        } else if (row.type === 'text' && typeof (row as { text?: unknown }).text === 'string') {
+          first = { kind: 'text', text: (row as { text: string }).text };
+        }
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      });
+      child.on('error', (err) => {
+        if (done) return;
+        done = true;
+        reject(err);
+      });
+      child.on('close', (code) => {
+        if (done) return;
+        done = true;
+        if (first) {
+          resolve(first);
+        } else {
+          reject(new Error(`mavis code-action exited (code=${code}) without a result row`));
+        }
+      });
+    });
+    return {
+      result: resultPromise,
+      cancel: () => {
+        if (done) return;
+        try {
+          child.stdin.end();
+        } catch {
+          /* ignore */
+        }
+        try {
+          child.kill();
+        } catch {
+          /* ignore */
+        }
+        done = true;
+      },
+    };
+  }
+
   /** Tears down all running streams. Idempotent. */
   dispose(): void {
     if (this.disposed) return;
@@ -291,6 +477,8 @@ export class MavisClient {
     this.onAgentsChanged.removeAllListeners();
     this.onSessionsChanged.removeAllListeners();
     this.onContextChanged.removeAllListeners();
+    this.onSessionCreated.removeAllListeners();
+    this.onSessionSwitched.removeAllListeners();
   }
 
   // ------------------------------------------------------------------ internals
