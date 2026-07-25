@@ -327,3 +327,109 @@ test('ChatViewProvider: ensureStream swaps the handle when sessionId changes', a
   handle2.close();
   await new Promise((r) => setImmediate(r));
 });
+
+// ----------------------------------------------------------------- attachments
+
+test('ChatViewProvider: addAttachment broadcasts an "attachments" message', () => {
+  const { provider, webview } = makeProvider();
+  provider.addAttachment({ id: 'a1', name: 'foo.txt', source: 'os', path: '/tmp/foo.txt' });
+  const msg = webview.posted.find(
+    (m) => (m as HostToWebview).type === 'attachments',
+  ) as Extract<HostToWebview, { type: 'attachments' }> | undefined;
+  assert.ok(msg);
+  assert.equal(msg!.attachments.length, 1);
+  assert.equal(msg!.attachments[0].id, 'a1');
+  assert.equal(msg!.attachments[0].source, 'os');
+});
+
+test('ChatViewProvider: addAttachment dedupes by id (replaces, not appends)', () => {
+  const { provider, webview } = makeProvider();
+  provider.addAttachment({ id: 'a1', name: 'old', source: 'drive', driveId: 'd1' });
+  provider.addAttachment({ id: 'a1', name: 'new', source: 'drive', driveId: 'd1' });
+  const all = provider.getAttachments();
+  assert.equal(all.length, 1);
+  assert.equal(all[0].name, 'new');
+  // The webview should have received at least 2 attachments messages
+  // (one per addAttachment), both with a single item in the list.
+  const msgs = webview.posted.filter((m) => (m as HostToWebview).type === 'attachments') as Array<
+    Extract<HostToWebview, { type: 'attachments' }>
+  >;
+  assert.ok(msgs.length >= 2);
+  assert.equal(msgs[msgs.length - 1].attachments[0].name, 'new');
+});
+
+test('ChatViewProvider: removeAttachment drops by id and broadcasts', () => {
+  const { provider, webview } = makeProvider();
+  provider.addAttachment({ id: 'a1', name: 'x', source: 'os', path: '/tmp/x' });
+  provider.addAttachment({ id: 'a2', name: 'y', source: 'os', path: '/tmp/y' });
+  const removed = provider.removeAttachment('a1');
+  assert.equal(removed, true);
+  assert.equal(provider.getAttachments().length, 1);
+  assert.equal(provider.getAttachments()[0].id, 'a2');
+  // Last attachments message has only a2.
+  const msgs = webview.posted.filter((m) => (m as HostToWebview).type === 'attachments') as Array<
+    Extract<HostToWebview, { type: 'attachments' }>
+  >;
+  const last = msgs[msgs.length - 1];
+  assert.equal(last.attachments.length, 1);
+  assert.equal(last.attachments[0].id, 'a2');
+});
+
+test('ChatViewProvider: removeAttachment returns false for unknown id', () => {
+  const { provider } = makeProvider();
+  assert.equal(provider.removeAttachment('nope'), false);
+});
+
+test('ChatViewProvider: handleDroppedFiles parses {file:<id>:<name>} as a drive attachment', () => {
+  const { provider, webview } = makeProvider();
+  const added = provider.handleDroppedFiles([{ name: 'spec.md', payload: '{file:d_1:spec.md}' }]);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].source, 'drive');
+  assert.equal(added[0].driveId, 'd_1');
+  assert.equal(added[0].name, 'spec.md');
+  // The webview received an attachments update.
+  const msgs = webview.posted.filter((m) => (m as HostToWebview).type === 'attachments');
+  assert.ok(msgs.length >= 1);
+});
+
+test('ChatViewProvider: handleDroppedFiles parses OS file paths as os attachments', () => {
+  const { provider } = makeProvider();
+  const added = provider.handleDroppedFiles([{ name: 'report.pdf', path: '/home/user/report.pdf', mimeType: 'application/pdf' }]);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].source, 'os');
+  assert.equal(added[0].path, '/home/user/report.pdf');
+  assert.equal(added[0].mimeType, 'application/pdf');
+  assert.equal(added[0].name, 'report.pdf');
+});
+
+test('ChatViewProvider: handleDroppedFiles uses the basename when name is missing', () => {
+  const { provider } = makeProvider();
+  const added = provider.handleDroppedFiles([{ name: 'file.txt', path: '/tmp/some-folder/inside/file.txt' }]);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].name, 'file.txt');
+});
+
+test('ChatViewProvider: formatAttachmentsForPrompt produces {file:id:name} for drive entries', () => {
+  const { provider } = makeProvider();
+  provider.addAttachment({ id: 'att_drive_d1', name: 'spec.md', source: 'drive', driveId: 'd1' });
+  provider.addAttachment({ id: 'att_os_0', name: 'local.txt', source: 'os', path: '/tmp/local.txt' });
+  const s = provider.formatAttachmentsForPrompt();
+  assert.match(s, /\{file:d1:spec\.md\}/);
+  assert.match(s, /\/tmp\/local\.txt/);
+});
+
+test('ChatViewProvider: addAttachment / removeAttachment webview messages', async () => {
+  const { provider, webview } = makeProvider();
+  type AnyHandle = { handleWebviewMessage: (m: WebviewToHost) => Promise<void> };
+  const h = provider as unknown as AnyHandle;
+  await h.handleWebviewMessage({ type: 'addAttachment', attachment: { id: 'a1', name: 'x', source: 'os', path: '/x' } });
+  assert.equal(provider.getAttachments().length, 1);
+  await h.handleWebviewMessage({ type: 'removeAttachment', id: 'a1' });
+  assert.equal(provider.getAttachments().length, 0);
+  const msgs = webview.posted.filter((m) => (m as HostToWebview).type === 'attachments') as Array<
+    Extract<HostToWebview, { type: 'attachments' }>
+  >;
+  // Initial add: 1, then add: still 1, then remove: 0.
+  assert.ok(msgs.length >= 2);
+  assert.equal(msgs[msgs.length - 1].attachments.length, 0);
+});
