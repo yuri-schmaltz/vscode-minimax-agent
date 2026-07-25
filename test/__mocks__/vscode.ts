@@ -174,11 +174,13 @@ export const languages = {
 
 export const window = {
   activeTextEditor: undefined as unknown,
-  showInformationMessage: async () => undefined,
-  showErrorMessage: async () => undefined,
-  showWarningMessage: async () => undefined,
-  showInputBox: async () => undefined,
-  showQuickPick: async () => undefined,
+  showInformationMessage: async (_msg?: unknown, _options?: unknown, ..._items: unknown[]) => undefined,
+  showErrorMessage: async (_msg?: unknown, _options?: unknown, ..._items: unknown[]) => undefined,
+  showWarningMessage: async (_msg?: unknown, _options?: unknown, ..._items: unknown[]) => undefined,
+  showInputBox: async (_options?: unknown) => undefined,
+  showQuickPick: async (_items?: unknown, _options?: unknown) => undefined,
+  showSaveDialog: async () => undefined,
+  showOpenDialog: async () => undefined,
   createStatusBarItem: () => ({
     text: '',
     tooltip: undefined,
@@ -187,16 +189,31 @@ export const window = {
     hide: () => undefined,
     dispose: () => undefined,
   }),
+  createTreeView: <T>(_id: string, _options?: unknown) => {
+    const view = {
+      reveal: async (_item?: T) => undefined,
+      dispose: () => undefined,
+    };
+    return view;
+  },
   registerWebviewViewProvider: () => ({ dispose: () => undefined }),
+  registerTreeDataProvider: (_id: string, _provider: unknown) => ({ dispose: () => undefined }),
+  withProgress: async (_opts: unknown, task: (progress: { report: (v: unknown) => void }, token: unknown) => Promise<unknown>) => {
+    return await task({ report: () => undefined }, { isCancellationRequested: false });
+  },
 };
 
 export const commands = {
   registerCommand: () => ({ dispose: () => undefined }),
   executeCommand: async () => undefined,
+  registerTextEditorCommand: () => ({ dispose: () => undefined }),
 };
 
 export const env = {
-  openExternal: async () => true,
+  openExternal: async (_uri: unknown) => true,
+  clipboard: {
+    writeText: async (_text: string) => undefined,
+  },
 };
 
 // Test-only injection point: tests can pre-load documents into this map
@@ -274,5 +291,156 @@ export class Position {
   constructor(line: number, character: number) {
     this.line = line;
     this.character = character;
+  }
+}
+
+export class ThemeIcon {
+  static readonly File: ThemeIcon = new ThemeIcon('file');
+  static readonly Folder: ThemeIcon = new ThemeIcon('folder');
+  static readonly Loading: ThemeIcon = new ThemeIcon('loading');
+  readonly id: string;
+  readonly color?: { id: string };
+  constructor(id: string, color?: { id: string }) {
+    this.id = id;
+    this.color = color;
+  }
+}
+
+export enum TreeItemCollapsibleState {
+  None = 0,
+  Collapsed = 1,
+  Expanded = 2,
+}
+
+export class TreeItem {
+  label?: string;
+  description?: string;
+  tooltip?: string;
+  iconPath?: { id: string } | string;
+  resourceUri?: Uri;
+  command?: { command: string; title: string; arguments?: unknown[] };
+  contextValue?: string;
+  collapsibleState: TreeItemCollapsibleState;
+  id?: string;
+  constructor(label: string | { label: string }, collapsibleState: TreeItemCollapsibleState = TreeItemCollapsibleState.None) {
+    if (typeof label === 'string') {
+      this.label = label;
+    } else {
+      this.label = label.label;
+    }
+    this.collapsibleState = collapsibleState;
+  }
+}
+
+export interface TreeDataProvider<T> {
+  onDidChangeTreeData?: import('vscode').Event<T | T[] | undefined | null>;
+  getTreeItem(element: T): import('vscode').TreeItem | Thenable<import('vscode').TreeItem>;
+  getChildren(element?: T): T[] | Thenable<T[]>;
+  getParent?(element: T): T | undefined | Thenable<T | undefined>;
+  // The interface is parameterised by the user; we leave T opaque to
+  // avoid coupling this mock to the production types.
+  readonly __phantom?: T;
+}
+
+export class RelativePattern {
+  base: string;
+  pattern: string;
+  constructor(base: string, pattern: string) {
+    this.base = base;
+    this.pattern = pattern;
+  }
+}
+
+export enum FileType {
+  Unknown = 0,
+  File = 1,
+  Directory = 2,
+  SymbolicLink = 64,
+}
+
+export const FileTypeModule = FileType;
+export const RelativePatternModule = RelativePattern;
+
+export interface DataTransferItem {
+  asString(): Thenable<string>;
+  asFile(): { name?: string; uri?: Uri; data?: unknown };
+  value: unknown;
+  types: ReadonlyArray<string>;
+}
+
+export class DataTransfer {
+  private items = new Map<string, DataTransferItem>();
+  set(mimeType: string, value: unknown): void {
+    this.items.set(mimeType, {
+      asString: async () => String(value),
+      asFile: () => ({ data: value }),
+      value,
+      types: [mimeType],
+    } as DataTransferItem);
+  }
+  get(mimeType: string): DataTransferItem | undefined {
+    return this.items.get(mimeType);
+  }
+  forEach(cb: (item: DataTransferItem, mime: string) => void): void {
+    for (const [mime, item] of this.items.entries()) cb(item, mime);
+  }
+  has(mimeType: string): boolean {
+    return this.items.has(mimeType);
+  }
+}
+
+export class EventEmitterImpl<T = unknown> {
+  private listeners: Array<(e: T) => void> = [];
+  get event() {
+    return (listener: (e: T) => void) => {
+      this.listeners.push(listener);
+      return { dispose: () => { this.listeners = this.listeners.filter((l) => l !== listener); } };
+    };
+  }
+  fire(data: T): void {
+    for (const l of this.listeners) l(data);
+  }
+  dispose(): void {
+    this.listeners = [];
+  }
+}
+
+// Drag-and-drop controller shim for the production code. The real vscode
+// type is `vscode.DragAndDropController<T>`; tests can construct a fake
+// that exposes the same shape without needing a real editor.
+export class TreeDragAndDropController<T> {
+  onWillAcceptDrop?: (e: unknown) => unknown;
+  onWillDrop?: (e: unknown) => unknown;
+  onDidDrop?: (e: unknown) => unknown;
+  dragMimeTypes: readonly string[] = [];
+  dropMimeTypes: readonly string[] = [];
+  constructor(init?: {
+    onWillAcceptDrop?: (e: unknown) => unknown;
+    onWillDrop?: (e: unknown) => unknown;
+    onDidDrop?: (e: unknown) => unknown;
+    dragMimeTypes?: readonly string[];
+    dropMimeTypes?: readonly string[];
+  }) {
+    if (init) {
+      this.onWillAcceptDrop = init.onWillAcceptDrop;
+      this.onWillDrop = init.onWillDrop;
+      this.onDidDrop = init.onDidDrop;
+      this.dragMimeTypes = init.dragMimeTypes ?? [];
+      this.dropMimeTypes = init.dropMimeTypes ?? [];
+    }
+    void (null as unknown as T);
+  }
+}
+
+export class CancellationTokenSource {
+  token: import('vscode').CancellationToken = {
+    isCancellationRequested: false,
+    onCancellationRequested: (_l: unknown) => ({ dispose: () => undefined }),
+  };
+  cancel(): void {
+    this.token = { ...this.token, isCancellationRequested: true };
+  }
+  dispose(): void {
+    /* noop */
   }
 }
