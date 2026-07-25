@@ -27,7 +27,10 @@ type WebviewToHost =
   | { type: 'sendPrompt'; sessionId: string; text: string }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
-  | { type: 'copyToClipboard'; text: string };
+  | { type: 'copyToClipboard'; text: string }
+  | { type: 'switchSession'; sessionId: string }
+  | { type: 'closeTab'; sessionId: string }
+  | { type: 'injectAssistantMessage'; text: string };
 
 type HostToWebview =
   | { type: 'sessionChanged'; session: { id: string; agent: string } | null }
@@ -40,6 +43,10 @@ type HostToWebview =
   | {
       type: 'history';
       messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }>;
+    }
+  | {
+      type: 'tabs';
+      tabs: Array<{ id: string; agent: string; title: string; active: boolean }>;
     };
 
 // VSCode acquires a global `acquireVsCodeApi()` only inside an actual webview;
@@ -68,6 +75,7 @@ export function App(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [tabs, setTabs] = useState<Array<{ id: string; agent: string; title: string; active: boolean }>>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // Wire host → webview messages.
@@ -123,6 +131,9 @@ export function App(): JSX.Element {
             })),
           );
           break;
+        case 'tabs':
+          setTabs(msg.tabs);
+          break;
       }
     }
     window.addEventListener('message', onMessage);
@@ -168,6 +179,15 @@ export function App(): JSX.Element {
     }
   }, [session]);
 
+  const switchTo = useCallback((sessionId: string) => {
+    postToHost({ type: 'switchSession', sessionId });
+  }, []);
+
+  const closeTab = useCallback((sessionId: string, ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    postToHost({ type: 'closeTab', sessionId });
+  }, []);
+
   const headerSession = useMemo(() => shortSessionId(session?.id), [session]);
 
   return (
@@ -195,6 +215,35 @@ export function App(): JSX.Element {
           </button>
         </div>
       </header>
+      <nav className="mavis-tabs" aria-label="Recent sessions">
+        {tabs.map((t) => (
+          <div
+            key={t.id}
+            className={'mavis-tab' + (t.active ? ' mavis-tab-active' : '')}
+            onClick={() => switchTo(t.id)}
+            title={t.id}
+          >
+            <span className="mavis-tab-title">{t.title || shortSessionId(t.id)}</span>
+            <button
+              type="button"
+              className="mavis-tab-close"
+              aria-label="Close tab"
+              onClick={(e) => closeTab(t.id, e)}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="mavis-tab mavis-tab-new"
+          onClick={newSession}
+          title="New chat"
+          aria-label="New chat"
+        >
+          +
+        </button>
+      </nav>
 
       <div className="mavis-body" ref={bodyRef}>
         {messages.length === 0 && !error && (
