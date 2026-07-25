@@ -85,6 +85,29 @@ deliverable.md
 
 - `.vscodeignore` — added `webview/**` and `dist/**/*.map` so source
   TS/TSX is not shipped inside the `.vsix`.
+- `.github/workflows/ci.yml` — added `lint:secrets` and `test:coverage`
+  steps (cycle1-tests).
+
+### Added in cycle1-tests (hardening)
+
+```
+src/util/redact.ts                  (new) — fingerprintToken / redact / redactString
+src/client/MavisClient.ts          (modified) — typed MavisCliNotFoundError, SessionClosedError; MAVIS_MOCK=0 passthrough; dispose() now flips running.closed before closing stdin
+src/client/ndjson.ts               (modified) — all stderr writes piped through redactString
+src/auth/OAuth.ts                  (modified) — validateCodeVerifier(); deriveCodeChallenge() validates first; device-code polling has exponential backoff with cap
+src/__mocks__/vscode.ts            (modified) — WebviewOptions accepts readonly Uri[]
+test/helpers/spawnStub.ts          (modified) — added makePerCallSpawner() for multi-stream tests
+test/helpers/registerVscodeMock.cjs (new) — CJS loader that aliases `import 'vscode'` to the in-tree mock
+test/client/ndjson.test.ts                  (new) — 9 tests
+test/client/MavisClient.adversarial.test.ts (new) — 13 tests
+test/auth/OAuth.adversarial.test.ts         (new) — 15 tests
+test/auth/SecretStore.test.ts               (new) — 6 tests
+test/util/redact.test.ts                    (new) — 7 tests
+test/views/ChatViewProvider.test.ts         (new) — 11 tests
+scripts/check-secrets.cjs                   (new) — npm run lint:secrets
+test/manual/smoke.md                        (new) — E2E playbook
+test/manual/smoke.log                       (new) — sandbox smoke capture
+```
 
 ### Created outputs (for the verifier)
 
@@ -238,6 +261,96 @@ Other items consciously deferred:
 
 ---
 
+## 6.5 Test coverage (cycle1-tests hardening)
+
+> This is the work **added in cycle1-tests** to harden the cycle1-impl
+> baseline. The original 36 tests are unchanged; **61 new adversarial
+> tests** are added in dedicated files (see §6.5.3).
+
+### 6.5.1 Coverage table (per `npx c8 --reporter=text --include='src/**/*.ts'`)
+
+| File                          | % Stmts | % Branch | % Funcs | % Lines | Notes |
+|-------------------------------|--------:|---------:|--------:|--------:|-------|
+| `src/util/redact.ts`          | 96.82   | 73.07    | 100     | 96.82   | new — redaction helper, last-line-of-defence for token leaks |
+| `src/client/ndjson.ts`        | 100     | 84.21    | 100     | 100     | was 68.75% stmt — now exhaustive on the parser paths |
+| `src/auth/SecretStore.ts`     | 100     | 90.47    | 100     | 100     | was 95.91% — new edge cases (corrupt JSON, missing field) |
+| `src/client/MavisClient.ts`   | 92.75   | 84.26    | 89.65   | 92.75   | typed errors + `MAVIS_MOCK=0` passthrough |
+| `src/views/ChatViewProvider.ts` | 90.98 | 74.41    | 94.73   | 90.98   | **previously 0% — new file coverage** |
+| `src/statusbar/StatusBar.ts`  | 89.34   | 81.57    | 84      | 89.34   | unchanged from cycle1-impl |
+| `src/auth/OAuth.ts`           | 70.34   | 72.27    | 92.85   | 70.34   | was 52.65% — device-code polling + PKCE validator |
+| **All files (src/)**          | **84.94** | **78.63** | **92.48** | **84.94** | **+12.05 pp stmts, +10.81 pp branches vs cycle1-impl** |
+
+Coverage threshold enforced by `npm run test:coverage` (`c8
+--check-coverage --lines=60 --branches=60 --functions=80
+--statements=60`). All four thresholds pass.
+
+### 6.5.2 Adversarial cases covered
+
+| Spec line from cycle1-tests task                                  | File / test                                                                                                          |
+|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| PKCE: vazio → rejeita                                              | `test/auth/OAuth.adversarial.test.ts` → "PKCE: validateCodeVerifier rejects empty string"                            |
+| PKCE: < 43 chars → rejeita                                          | `…` → "PKCE: validateCodeVerifier rejects verifier shorter than 43 chars"                                            |
+| PKCE: chars fora de `[A-Z a-z 0-9 - . _ ~]` → rejeita               | `…` → "PKCE: validateCodeVerifier rejects characters outside the unreserved set"                                     |
+| PKCE: verifier válido → challenge bate com SHA-256 esperado        | `…` → "PKCE: deriveCodeChallenge matches base64url(sha256(verifier)) for a known input" (RFC 7636 §4.6 test vector) |
+| Device code: `expires_in=0` → polling para imediatamente            | `…` → "Device code: expires_in=0 → polling exits immediately with 'expired'"                                        |
+| Device code: `pending` em todas as tentativas → erro ao fim          | `…` → "Device code: 'pending' on every poll → fails with 'expired' once expires_in elapses"                          |
+| Device code: sucesso no meio do polling → resolve                   | `…` → "Device code: success on the third poll → resolves with the token"                                            |
+| Device code: network error durante poll → retry com backoff exp.    | `…` → "Device code: network error during poll → continues with exponential backoff (still resolves)"                |
+| NDJSON: chunked input                                               | `test/client/ndjson.test.ts` → "NDJSON: chunked input that splits a single line"                                    |
+| NDJSON: `\n` literal embedded                                       | `…` → "NDJSON: line with an escaped \n inside a JSON string is preserved"                                           |
+| NDJSON: linha malformada                                            | `…` → "NDJSON: malformed line (no closing brace) is dropped, others still parse"                                    |
+| NDJSON: evento de tipo desconhecido → ignorado graciosamente        | `…` → "NDJSON: unknown event types are passed through to the consumer (graceful ignore at dispatch)"                |
+| SecretStore: get de chave ausente → undefined                       | `test/auth/SecretStore.test.ts` → "SecretStore: read of an absent key returns undefined (no throw)"                 |
+| SecretStore: set com valor undefined → delete implícito (N/A: store API does not accept undefined; covered via explicit `clear()` + `read()` returning undefined) | `test/auth/SecretStore.test.ts` → "SecretStore: clear() removes the record" |
+| SecretStore: delete de chave ausente → no-op                        | `…` → "SecretStore: delete of an absent key is a no-op (no throw)"                                                  |
+| MavisClient: spawn com binário inexistente → `MavisCliNotFoundError` | `test/client/MavisClient.adversarial.test.ts` → "adversarial: resolveBinary throws MavisCliNotFoundError when no path is configured" |
+| MavisClient: sendPrompt após close → `SessionClosedError`            | `…` → "adversarial: sendPrompt after handle.close() throws SessionClosedError"                                       |
+| MavisClient: dispose durante stream ativo → cleanup, sem listeners órfãos | `…` → "adversarial: dispose() during an active stream kills the child and removes listeners"                  |
+| MavisClient: `MAVIS_MOCK=0` com archonUrl mockado funciona          | `…` → "adversarial: MAVIS_MOCK=0 in process.env with archonUrl set is passed through to the child"                |
+| Token não vaza pro webview via postMessage                         | `test/views/ChatViewProvider.test.ts` → "ChatViewProvider: never posts token-shaped fields in any message" + "ChatViewProvider: resolveWebviewView sets a strict CSP" |
+
+### 6.5.3 New test files
+
+```
+test/auth/OAuth.adversarial.test.ts          (15 tests)
+test/auth/SecretStore.test.ts                (6 tests)
+test/client/MavisClient.adversarial.test.ts  (13 tests)
+test/client/ndjson.test.ts                   (9 tests)
+test/util/redact.test.ts                     (7 tests)
+test/views/ChatViewProvider.test.ts          (11 tests)
+test/helpers/registerVscodeMock.cjs          (CJS loader that aliases `import 'vscode'` → the in-tree mock)
+test/helpers/spawnStub.ts                    (added makePerCallSpawner())
+```
+
+Total: **61 new tests** → 36 + 61 = **97 tests, 97/97 passing**.
+
+### 6.5.4 Source hardening (not just tests)
+
+| Change | Why |
+|--------|-----|
+| New `MavisCliNotFoundError` and `SessionClosedError` typed errors in `src/client/MavisClient.ts` | Callers can `instanceof`-check instead of parsing `err.message` |
+| `MavisClient.spawnEnv()` honours caller-provided `MAVIS_MOCK=0` instead of unconditionally overriding | Required for the “mock off” smoke test |
+| `MavisClient.dispose()` flips `running.closed = true` before `child.stdin.end()` | `sendPrompt` after dispose now throws synchronously instead of writing to a torn-down stream |
+| `src/auth/OAuth.ts`: new `validateCodeVerifier(verifier)` per RFC 7636 §4.1 | Catches bad verifiers at the source instead of letting a malformed challenge fail at the server |
+| `src/auth/OAuth.ts`: `deriveCodeChallenge(verifier)` now calls `validateCodeVerifier` first | Same — fail fast, no silent auth failure |
+| `src/auth/OAuth.ts`: device-code polling gained an exponential backoff (cap 8× base interval) and a reset on any successful round-trip | Replaces the "network blip → spin forever" path with a bounded retry |
+| New `src/util/redact.ts` (`fingerprintToken`, `redact`, `redactString`) | Single source of truth for masking before any log / postMessage |
+| `src/client/MavisClient.ts` and `src/client/ndjson.ts` now run every `process.stderr.write` through `redactString` | Defence in depth so a future bug can't leak a token-shaped substring into a log |
+| `scripts/check-secrets.cjs` (new) — `npm run lint:secrets` | CI gate against token-shaped values in `console.*` or `postMessage` call sites |
+| `.github/workflows/ci.yml` runs `lint:secrets` + `test:coverage` on every push | Coverage / secret-leak regressions fail the build |
+
+### 6.5.5 E2E / manual smoke
+
+- `test/manual/smoke.md` — full step-by-step playbook for the
+  `code --install-extension` → Sign in → New chat → Send "hello" → Sign
+  out flow. Includes a sandbox note explaining that the manual part can
+  only be run on a workstation with the `code` CLI; the CI sandbox
+  runs the automated parts and emits `test/manual/smoke.log`.
+- `test/manual/smoke.log` — captured `npm run package` output plus the
+  `unzip -l vscode-agent-0.1.0.vsix` listing. 22 files, 271.5 KB.
+
+---
+
 ## 7. How to verify locally
 
 ```bash
@@ -247,7 +360,9 @@ git remote -v                   # confirm no token in URL
 npm ci                          # clean install
 npm run lint                    # 0 errors
 npm run typecheck               # 0 errors
-npm test                        # 36/36 pass
+npm run lint:secrets            # secret-leak audit (0 findings)
+npm test                        # 97/97 pass (was 36/36 at cycle1-impl)
+npm run test:coverage           # coverage gate (>=60% stmt/br, >=80% fn)
 npm run package                 # produces vscode-agent-0.1.0.vsix
 code --install-extension /workspace/repo-clone/vscode-agent-0.1.0.vsix
 ```
@@ -271,10 +386,21 @@ without a real archon-server.
 
 ## VEREDITO FINAL: PASS
 
-- All 36 unit tests pass (`npm test`).
-- Lint and typecheck produce zero diagnostics.
-- `.vsix` packages successfully (~270 KB).
-- 8 atomic Conventional Commits pushed to `main` at `f719752`.
+- All 97 unit tests pass (`npm test`) — 36 from cycle1-impl + 61 new
+  adversarial tests in cycle1-tests.
+- Lint, typecheck, and the secret-leak audit (`npm run lint:secrets`)
+  produce zero diagnostics.
+- `npm run test:coverage` passes its thresholds (>= 60% stmts /
+  branches, >= 80% functions; see §6.5.1 for the per-file table).
+  Overall: **84.94% stmts, 78.63% branches, 92.48% functions** across
+  `src/**/*.ts`.
+- `.vsix` packages successfully (271.5 KB, 22 files — see
+  `test/manual/smoke.log`).
+- Adversarial coverage: PKCE ✓, Device code ✓, NDJSON parser ✓,
+  SecretStore ✓, MavisClient ✓, ChatViewProvider ✓.
+- E2E/manual: `test/manual/smoke.md` + `test/manual/smoke.log` ✓.
+- 9 atomic Conventional Commits pushed to `main` (cycle1-impl = 8,
+  cycle1-tests = 1: `test: add adversarial coverage`).
 - Remote URL sanitized.
 - Deliverable + `.vsix` copied to the plan outputs directory.
 

@@ -15,6 +15,7 @@ import { spawn, ChildProcessWithoutNullStreams, SpawnOptions } from 'node:child_
 import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
 import { NDJSONParser } from './ndjson';
+import { redactString } from '../util/redact';
 import {
   AgentSummary,
   ClientEvent,
@@ -25,6 +26,32 @@ import {
 } from './types';
 
 export const PROTOCOL_VERSION = 1;
+
+/**
+ * Thrown when neither `mavis.cliPath` is set nor the bundled shim is
+ * resolvable (e.g. extension package is missing the `resources/` folder).
+ *
+ * Code that wants to surface a "please install the CLI" message to the
+ * user should `instanceof` this rather than parsing `err.message`.
+ */
+export class MavisCliNotFoundError extends Error {
+  override readonly name = 'MavisCliNotFoundError';
+  constructor(message = 'Mavis CLI not found. Set `mavis.cliPath` in settings or install the bundled shim.') {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a caller tries to interact with a stream handle after the
+ * underlying child has already been closed (either explicitly via
+ * `handle.close()` or implicitly via `MavisClient.dispose()`).
+ */
+export class SessionClosedError extends Error {
+  override readonly name = 'SessionClosedError';
+  constructor(public readonly sessionId: string) {
+    super(`stream for ${sessionId} is closed`);
+  }
+}
 
 export interface MavisClientOptions {
   /** Override path to the mavis binary. Takes priority over the bundled shim. */
@@ -101,9 +128,7 @@ export class MavisClient {
     }
     const bundled = this.options.resolveBundledPath();
     if (!bundled) {
-      throw new Error(
-        'Mavis CLI not found. Set `mavis.cliPath` in settings or install the bundled shim.',
-      );
+      throw new MavisCliNotFoundError();
     }
     return bundled;
   }
@@ -175,7 +200,7 @@ export class MavisClient {
     });
 
     child.stderr!.on('data', (chunk: Buffer) => {
-      process.stderr.write(`[mavis:cli] ${chunk.toString('utf8')}`);
+      process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
     });
 
     child.on('error', (err) => {
@@ -201,7 +226,7 @@ export class MavisClient {
     const handle: StreamHandle = {
       sendPrompt: (text: string) => {
         if (running.closed) {
-          throw new Error(`stream for ${sessionId} is closed`);
+          throw new SessionClosedError(sessionId);
         }
         const msg: PromptMessage = { type: 'prompt', text };
         child.stdin.write(JSON.stringify(msg) + '\n');
@@ -247,6 +272,9 @@ export class MavisClient {
     if (this.disposed) return;
     this.disposed = true;
     for (const s of this.streams) {
+      // Mark closed first so any in-flight sendPrompt throws SessionClosedError
+      // synchronously instead of writing to a torn-down stdin.
+      s.closed = true;
       try {
         s.child.stdin.end();
       } catch {
@@ -269,8 +297,13 @@ export class MavisClient {
 
   private spawnEnv(): SpawnOptions {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    if (this.options.mock || !this.options.archonUrl) {
-      env.MAVIS_MOCK = '1';
+    // Respect an explicit caller-provided MAVIS_MOCK value (e.g. MAVIS_MOCK=0
+    // to force the real CLI path even when archonUrl is empty). Only set the
+    // default to '1' when the caller did not opt in either way.
+    if (env.MAVIS_MOCK === undefined) {
+      if (this.options.mock || !this.options.archonUrl) {
+        env.MAVIS_MOCK = '1';
+      }
     }
     if (this.options.archonUrl) {
       env.MAVIS_ARCHON_URL = this.options.archonUrl;
@@ -297,7 +330,7 @@ export class MavisClient {
       parser.on('end', () => resolve(out));
       parser.on('error', (err) => reject(err));
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${chunk.toString('utf8')}`);
+        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {

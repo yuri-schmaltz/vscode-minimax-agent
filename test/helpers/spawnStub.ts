@@ -48,3 +48,19 @@ export function makeFakeChild(): FakeChild {
 export function makeSpawner(child: FakeChild): typeof spawn {
   return (() => child) as unknown as typeof spawn;
 }
+
+/**
+ * Returns a spawn function that mints a fresh FakeChild on every call.
+ * Use this when the test exercises code that creates more than one child
+ * (e.g. two sessions in parallel); `makeSpawner` always returns the same
+ * child, which makes the second `streamSession` share the (ended) stdin.
+ */
+export function makePerCallSpawner(): { spawn: typeof spawn; children: FakeChild[] } {
+  const children: FakeChild[] = [];
+  function spawnFn(_bin: string, _args: string[], _opts: unknown): ReturnType<typeof spawn> {
+    const c = makeFakeChild();
+    children.push(c);
+    return c as unknown as ReturnType<typeof spawn>;
+  }
+  return { spawn: spawnFn as unknown as typeof spawn, children };
+}

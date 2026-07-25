@@ -55,7 +55,46 @@ export function generateCodeVerifier(): string {
   return base64UrlEncode(crypto.randomBytes(32));
 }
 
+/**
+ * Validate a code verifier per RFC 7636 §4.1.
+ *
+ * Throws an Error with a descriptive message if the verifier is empty,
+ * too short, too long, or contains characters outside the unreserved
+ * set `[A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"`.
+ *
+ * The function is exported for downstream consumers (and tests) that
+ * need to assert "this is a real RFC-7636-conformant verifier" before
+ * passing it to a token endpoint.
+ */
+export function validateCodeVerifier(verifier: string): void {
+  if (typeof verifier !== 'string') {
+    throw new TypeError('code_verifier must be a string');
+  }
+  if (verifier.length === 0) {
+    throw new RangeError('code_verifier must not be empty');
+  }
+  if (verifier.length < 43) {
+    throw new RangeError(
+      `code_verifier must be at least 43 chars (RFC 7636 §4.1); got ${verifier.length}`,
+    );
+  }
+  if (verifier.length > 128) {
+    throw new RangeError(
+      `code_verifier must be at most 128 chars (RFC 7636 §4.1); got ${verifier.length}`,
+    );
+  }
+  if (!/^[A-Za-z0-9\-._~]+$/.test(verifier)) {
+    throw new RangeError(
+      'code_verifier contains characters outside the unreserved set [A-Z a-z 0-9 - . _ ~]',
+    );
+  }
+}
+
 export function deriveCodeChallenge(verifier: string): string {
+  // Refuse to produce a challenge from an obviously-bad verifier; the
+  // alternative is a silent auth failure at the token endpoint, which is
+  // harder to diagnose.
+  validateCodeVerifier(verifier);
   return base64UrlEncode(crypto.createHash('sha256').update(verifier).digest());
 }
 
@@ -256,8 +295,18 @@ export class OAuthManager extends EventEmitter {
     }
     const startedAt = Date.now();
     const intervalMs = Math.max(1, codeBody.interval) * 1000;
-    while (Date.now() - startedAt < codeBody.expires_in * 1000) {
-      await sleep(intervalMs);
+    const expiresAt = startedAt + codeBody.expires_in * 1000;
+    // Exponential backoff for network errors. Reset to the base interval as
+    // soon as a poll round succeeds (or the server replies with a real
+    // status). Cap at 8× the base interval to stay well below expires_in.
+    let backoff = intervalMs;
+    const backoffCap = intervalMs * 8;
+    let pendingAttempts = 0;
+    while (Date.now() < expiresAt) {
+      const remaining = expiresAt - Date.now();
+      const wait = Math.min(remaining, backoff);
+      if (wait <= 0) break;
+      await sleep(wait);
       let res: Response;
       try {
         res = await f(`${opts.archonUrl.replace(/\/$/, '')}/oauth/token`, {
@@ -269,8 +318,13 @@ export class OAuthManager extends EventEmitter {
             device_code: codeBody.device_code,
           }),
         });
+        // A real round-trip (success or HTTP error) counts as a successful
+        // reachability check; reset the backoff so a transient blip doesn't
+        // permanently slow the poll loop.
+        backoff = intervalMs;
       } catch (err) {
-        // Network blip — keep polling until expiry.
+        // Network blip — exponential backoff, then keep polling until expiry.
+        backoff = Math.min(backoffCap, backoff * 2);
         continue;
       }
       if (res.ok) {
@@ -283,10 +337,12 @@ export class OAuthManager extends EventEmitter {
       }
       if (res.status === 400 || res.status === 401) {
         // authorization_pending or slow_down — keep polling.
+        pendingAttempts += 1;
         continue;
       }
       throw new Error(`device code token request failed: ${res.status}`);
     }
+    void pendingAttempts; // reserved for future telemetry
     throw new Error('device code flow expired');
   }
 

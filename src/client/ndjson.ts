@@ -7,6 +7,7 @@
  * re-parse the JSON string).
  */
 import { Transform, TransformCallback } from 'node:stream';
+import { redactString } from '../util/redact';
 
 export class NDJSONParser extends Transform {
   private buf = '';
@@ -28,7 +29,7 @@ export class NDJSONParser extends Transform {
         // Drop malformed lines instead of crashing the whole stream. The
         // shim never produces these in mock mode, but the real CLI might
         // (e.g. ANSI escapes on TTY). Log to stderr for debugging.
-        process.stderr.write(`[mavis:ndjson] dropped malformed line: ${line.slice(0, 120)}\n`);
+        process.stderr.write(`[mavis:ndjson] dropped malformed line: ${redactString(line.slice(0, 120))}\n`);
       }
     }
     cb();
@@ -39,7 +40,7 @@ export class NDJSONParser extends Transform {
       try {
         this.push(JSON.parse(this.buf));
       } catch {
-        process.stderr.write(`[mavis:ndjson] dropped trailing buffer: ${this.buf.slice(0, 120)}\n`);
+        process.stderr.write(`[mavis:ndjson] dropped trailing buffer: ${redactString(this.buf.slice(0, 120))}\n`);
       }
       this.buf = '';
     }

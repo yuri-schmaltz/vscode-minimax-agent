@@ -28,11 +28,19 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Secret-leak audit
+        run: npm run lint:secrets
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Test
         run: npm test
+
+      - name: Coverage (must stay above the per-file threshold)
+        run: npm run test:coverage
+        # test:coverage uses `c8 --check-coverage` and exits non-zero when
+        # any included src/ file falls below 60% stmt / 60% branch / 80% fn.
 
       - name: Package .vsix
         run: npm run package

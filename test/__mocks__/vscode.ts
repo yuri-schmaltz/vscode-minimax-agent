@@ -35,7 +35,8 @@ export class Uri {
 
 export interface WebviewOptions {
   enableScripts?: boolean;
-  localResourceRoots?: Uri[];
+  enableForms?: boolean;
+  localResourceRoots?: readonly Uri[];
 }
 
 export interface Webview {

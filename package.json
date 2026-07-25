@@ -172,7 +172,9 @@
     "package": "npm run build && vsce package",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx $(find test -name '*.test.ts' | tr '\\n' ' ')",
+    "test": "node --test --import tsx --import ./test/helpers/registerVscodeMock.cjs $(find test -name '*.test.ts' | tr '\\n' ' ')",
+    "test:coverage": "c8 --reporter=text --reporter=text-summary --check-coverage --lines=60 --branches=60 --functions=80 --statements=60 --include='src/**/*.ts' npm test",
+    "lint:secrets": "node scripts/check-secrets.cjs",
     "pretest": "npm run typecheck && npm run lint"
   },
   "dependencies": {
@@ -189,6 +191,7 @@
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vscode/vsce": "^2.32.0",
+    "c8": "^10.1.3",
     "esbuild": "^0.23.1",
     "eslint": "^8.57.0",
     "tsx": "^4.19.0",
