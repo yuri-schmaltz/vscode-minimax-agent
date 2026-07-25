@@ -89,7 +89,10 @@ export class StatusBarController {
   async onClick(): Promise<void> {
     const items: QuickPickItem[] = [
       { label: '$(comment-discussion) New chat', description: 'Start a fresh Mavis session' },
-      { label: '$(robot) Switch agent', description: `Current: ${this.currentAgent}` },
+      { label: '$(history) Switch session...', description: `Current: ${shortSession(this.currentSession)}` },
+      { label: '$(robot) Switch agent...', description: `Current: ${this.currentAgent}` },
+      { label: '$(list-unordered) List sessions', description: 'Read-only list of recent sessions' },
+      { label: '$(organization) List agents', description: 'Read-only list of available agents' },
       { label: this.signedIn ? '$(sign-out) Sign out' : '$(sign-in) Sign in' },
     ];
     const pick = await this.opts.host.showQuickPick(items, {
@@ -98,16 +101,14 @@ export class StatusBarController {
     if (!pick) return;
     if (pick.label.startsWith('$(comment-discussion)')) {
       await this.opts.host.executeCommand('mavis.newChat');
+    } else if (pick.label.startsWith('$(history)')) {
+      await this.opts.host.executeCommand('mavis.switchSession');
     } else if (pick.label.startsWith('$(robot)')) {
-      const agents = await this.opts.client.listAgents();
-      const agentItems = agents.map<QuickPickItem>((a) => ({
-        label: a.id,
-        description: a.name + (a.isDefault ? ' (default)' : ''),
-      }));
-      const next = await this.opts.host.showQuickPick(agentItems, { placeHolder: 'Pick an agent' });
-      if (next) {
-        this.opts.client.setActiveAgent(next.label);
-      }
+      await this.opts.host.executeCommand('mavis.switchAgent');
+    } else if (pick.label.startsWith('$(list-unordered)')) {
+      await this.opts.host.executeCommand('mavis.listSessions');
+    } else if (pick.label.startsWith('$(organization)')) {
+      await this.opts.host.executeCommand('mavis.listAgents');
     } else if (pick.label.includes('Sign in')) {
       await this.opts.host.executeCommand('mavis.signIn');
     } else if (pick.label.includes('Sign out')) {
@@ -125,11 +126,17 @@ export class StatusBarController {
     const sess = this.currentSession ? this.currentSession.slice(0, 8) : '—';
     const signed = this.signedIn ? '●' : '○';
     this.item.text = `$(mavis-icon) Mavis: ${this.currentAgent} | ${sess} ${signed}`;
+    this.item.tooltip = `agent: ${this.currentAgent} | session: ${this.currentSession ?? '—'} | signed-in: ${this.signedIn}`;
   }
 
   dispose(): void {
     this.item.dispose();
   }
+}
+
+function shortSession(id: string | undefined): string {
+  if (!id) return '—';
+  return id.length <= 8 ? id : id.slice(0, 8);
 }
 
 /**
