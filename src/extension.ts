@@ -32,6 +32,9 @@ import {
 import { CodeActionKind as MavisActionKind, DriveItem } from './client/types';
 import { CronForm } from './cron/CronForm';
 import { CronListProvider } from './cron/CronListProvider';
+import { SettingsViewProvider } from './views/SettingsViewProvider';
+import { detectLocale, t as i18n } from './i18n';
+import { Telemetry, makeDefaultTelemetryHost } from './telemetry/Telemetry';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
@@ -42,6 +45,8 @@ let driveView: DriveViewProvider | undefined;
 let sessionCounter = 0;
 let sessionCache: SessionCache | undefined;
 let codeActionDisposable: { dispose(): void } | undefined;
+let settingsView: SettingsViewProvider | undefined;
+let telemetry: Telemetry | undefined;
 
 function newSessionId(): string {
   sessionCounter += 1;
@@ -194,9 +199,93 @@ export function activate(context: ExtensionContext): void {
   codeActionDisposable = registerCodeActionProvider(context, client, codeDeps);
   context.subscriptions.push({ dispose: () => codeActionDisposable?.dispose() });
 
+  // --- Settings (Fase 5, Bloco C) ---------------------------------------
+  // The settings view exposes a form for telemetry, default agent, CLI
+  // path, model, locale, and the read-only CLI version. Settings are
+  // persisted to `globalState` under `mavis.settings`.
+  const settings = SettingsViewProvider.load(context);
+  const initialLocale = settings.locale || detectLocale(env.language);
+  const extensionVersion = readExtensionVersion(context);
+  settingsView = new SettingsViewProvider({
+    context,
+    client,
+    cliVersion: extensionVersion,
+    pickFile: async () => {
+      const picked = await window.showOpenDialog({
+        title: 'Select mavis CLI',
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        openLabel: 'Select',
+      });
+      return picked && picked[0] ? picked[0].fsPath : undefined;
+    },
+  });
+
+  // --- Telemetry (Fase 5, Bloco A) --------------------------------------
+  // We initialise the singleton only after the user has had a chance to
+  // see the chat; the singleton itself decides whether to show the
+  // opt-in notice. Network errors are best-effort.
+  telemetry = Telemetry.init(makeDefaultTelemetryHost({
+    memento: context.globalState,
+    env: { machineId: env.machineId, language: env.language, sessionId: env.sessionId },
+    version: extensionVersion,
+    showNotice: async () => {
+      const pick = await window.showInformationMessage(
+        i18n('telemetry.notice.message', initialLocale),
+        i18n('telemetry.notice.enable', initialLocale),
+        i18n('telemetry.notice.later', initialLocale),
+        i18n('telemetry.notice.never', initialLocale),
+      );
+      if (pick === i18n('telemetry.notice.enable', initialLocale)) return 'enable';
+      if (pick === i18n('telemetry.notice.never', initialLocale)) return 'never';
+      if (pick === i18n('telemetry.notice.later', initialLocale)) return 'later';
+      return undefined;
+    },
+    send: async (events) => {
+      // Best-effort: post to the mock endpoint. In real life this would
+      // be a fetch() with a short timeout. We never throw.
+      try {
+        if (typeof globalThis.fetch !== 'function') return false;
+        // The endpoint is intentionally local and may not resolve; we
+        // don't want a console error if it doesn't. The telemetry queue
+        // handles failures gracefully anyway.
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 1500);
+        try {
+          const res = await globalThis.fetch('https://telemetry.minimax.local/v1/events', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ events }),
+            signal: ctrl.signal,
+          });
+          return res.status >= 200 && res.status < 300;
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        return false;
+      }
+    },
+    getSetting: () => {
+      const cfg = workspace.getConfiguration('mavis');
+      const v = cfg.get<unknown>('telemetry', false);
+      if (v === 'ask-once' || v === 'true') return 'ask-once' as const;
+      if (v === true || v === 'true') return true as const;
+      if (v === false || v === 'false') return false as const;
+      return false as const;
+    },
+    setSetting: async (v) => {
+      const cfg = workspace.getConfiguration('mavis');
+      // Persist as string for marketplace-friendliness.
+      const stored = v === true ? 'true' : v === 'ask-once' ? 'ask-once' : 'false';
+      await cfg.update('telemetry', stored, true);
+    },
+  }));
+
   context.subscriptions.push(
     commands.registerCommand('mavis.hello', () => {
-      window.showInformationMessage('Hello from Mavis');
+      window.showInformationMessage(i18n('auth.signedIn', initialLocale));
     }),
     commands.registerCommand('mavis.signIn', async () => {
       try {
@@ -208,7 +297,7 @@ export function activate(context: ExtensionContext): void {
           flow: oauthFlowRaw as 'auto' | 'deviceCode' | 'pkce',
         });
         const has = await oauth!.hasToken();
-        window.showInformationMessage(has ? 'Signed in to Mavis' : 'Sign-in failed');
+        window.showInformationMessage(has ? i18n('auth.signedIn', initialLocale) : i18n('auth.signInUnknown', initialLocale));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         window.showErrorMessage(`Mavis sign-in failed: ${message}`);
@@ -216,7 +305,7 @@ export function activate(context: ExtensionContext): void {
     }),
     commands.registerCommand('mavis.signOut', async () => {
       await oauth!.signOut({ archonUrl });
-      window.showInformationMessage('Signed out of Mavis');
+      window.showInformationMessage(i18n('auth.signedOut', initialLocale));
     }),
     commands.registerCommand('mavis.newChat', () => {
       const id = newSessionId();
@@ -248,8 +337,14 @@ export function activate(context: ExtensionContext): void {
     commands.registerCommand('mavis.toggleChat', () => {
       commands.executeCommand('workbench.view.mavis-chat');
     }),
-    commands.registerCommand('mavis.openSettings', () => {
-      commands.executeCommand('workbench.action.openSettings', 'mavis');
+    commands.registerCommand('mavis.openSettings', async () => {
+      // Open the in-extension settings panel if we have a view provider;
+      // fall back to the native VSCode settings UI.
+      if (settingsView) {
+        await settingsView.openPanel();
+        return;
+      }
+      await commands.executeCommand('workbench.action.openSettings', 'mavis');
     }),
     commands.registerCommand('mavis._statusBarClick', () => {
       statusBar?.onClick();
@@ -441,7 +536,7 @@ export function activate(context: ExtensionContext): void {
   );
 
   // On activation, surface "Hello" once (Fase 0 placeholder).
-  window.showInformationMessage('MiniMax Agent (Mavis) ready. Cmd/Ctrl+Shift+M to open chat.');
+  window.showInformationMessage(i18n('extension.ready', initialLocale));
 }
 
 export function deactivate(): void {
@@ -452,9 +547,28 @@ export function deactivate(): void {
   chatView = undefined;
   codeActionDisposable?.dispose();
   codeActionDisposable = undefined;
+  settingsView = undefined;
+  telemetry?.dispose();
+  telemetry = undefined;
   client?.dispose();
   client = undefined;
   secretStore = undefined;
   oauth = undefined;
   sessionCache = undefined;
+}
+
+/**
+ * Reads the extension version from `package.json`. Falls back to
+ * `0.0.0` if it can't be resolved (e.g. tests). The version is shown
+ * in the settings UI and stamped on every telemetry event.
+ */
+function readExtensionVersion(context: ExtensionContext): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require(path.join(context.extensionPath, 'package.json'));
+    if (pkg && typeof pkg.version === 'string') return pkg.version;
+  } catch {
+    /* fall through */
+  }
+  return '0.0.0';
 }

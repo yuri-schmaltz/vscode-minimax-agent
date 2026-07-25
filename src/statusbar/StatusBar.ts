@@ -12,6 +12,7 @@
  */
 import { MavisClient } from '../client/MavisClient';
 import { OAuthManager } from '../auth/OAuth';
+import { Locale, t as i18n } from '../i18n';
 
 export interface StatusBarItem {
   text: string;
@@ -43,6 +44,8 @@ export interface StatusBarOptions {
   priority?: number;
   /** Initial agent label to render before MavisClient has any data. */
   initialAgent?: string;
+  /** Locale for the menu + tooltip strings. Defaults to 'en'. */
+  locale?: Locale;
 }
 
 export class StatusBarController {
@@ -50,7 +53,7 @@ export class StatusBarController {
   private currentAgent: string;
   private currentSession: string | undefined;
   private signedIn = false;
-  private readonly opts: Required<Omit<StatusBarOptions, 'host' | 'client' | 'oauth' | 'initialAgent'>> & StatusBarOptions;
+  private readonly opts: Required<Omit<StatusBarOptions, 'host' | 'client' | 'oauth' | 'initialAgent' | 'locale'>> & StatusBarOptions;
 
   constructor(opts: StatusBarOptions) {
     this.opts = {
@@ -59,12 +62,13 @@ export class StatusBarController {
       oauth: opts.oauth,
       priority: opts.priority ?? 100,
       initialAgent: opts.initialAgent ?? opts.client.getActiveAgent() ?? 'mavis',
+      locale: opts.locale ?? 'en',
     };
     this.currentAgent = this.opts.initialAgent ?? 'mavis';
     this.currentSession = opts.client.getActiveSession();
     this.item = opts.host.createStatusBarItem(StatusAlignmentLeft, this.opts.priority);
     this.item.command = 'mavis._statusBarClick';
-    this.item.tooltip = 'MiniMax Agent — click for actions';
+    this.item.tooltip = i18n('statusBar.tooltip', this.opts.locale, { agent: this.currentAgent, session: this.currentSession ?? '—', signedIn: 'false' });
     this.item.show();
     this.render();
   }
@@ -85,34 +89,43 @@ export class StatusBarController {
     });
   }
 
+  /** Update the locale (called when the user changes it in settings). */
+  setLocale(locale: Locale): void {
+    this.opts.locale = locale;
+    this.render();
+  }
+
   /** Called by extension.ts when the status bar item is clicked. */
   async onClick(): Promise<void> {
     const items: QuickPickItem[] = [
-      { label: '$(comment-discussion) New chat', description: 'Start a fresh Mavis session' },
-      { label: '$(history) Switch session...', description: `Current: ${shortSession(this.currentSession)}` },
-      { label: '$(robot) Switch agent...', description: `Current: ${this.currentAgent}` },
-      { label: '$(list-unordered) List sessions', description: 'Read-only list of recent sessions' },
-      { label: '$(organization) List agents', description: 'Read-only list of available agents' },
-      { label: this.signedIn ? '$(sign-out) Sign out' : '$(sign-in) Sign in' },
+      { label: i18n('statusBar.menu.newChat', this.opts.locale), description: i18n('statusBar.menu.newChat.description', this.opts.locale) },
+      { label: i18n('statusBar.menu.switchSession', this.opts.locale), description: i18n('statusBar.menu.switchSession.description', this.opts.locale, { session: shortSession(this.currentSession) }) },
+      { label: i18n('statusBar.menu.switchAgent', this.opts.locale), description: i18n('statusBar.menu.switchAgent.description', this.opts.locale, { agent: this.currentAgent }) },
+      { label: i18n('statusBar.menu.listSessions', this.opts.locale), description: i18n('statusBar.menu.listSessions.description', this.opts.locale) },
+      { label: i18n('statusBar.menu.listAgents', this.opts.locale), description: i18n('statusBar.menu.listAgents.description', this.opts.locale) },
+      { label: this.signedIn ? i18n('statusBar.menu.signOut', this.opts.locale) : i18n('statusBar.menu.signIn', this.opts.locale) },
     ];
     const pick = await this.opts.host.showQuickPick(items, {
-      placeHolder: 'Mavis actions',
+      placeHolder: i18n('statusBar.menu.title', this.opts.locale),
     });
     if (!pick) return;
-    if (pick.label.startsWith('$(comment-discussion)')) {
+    // Match by the start of the label since the menu items are
+    // i18n-aware (e.g. "Nova conversa" in pt-BR) — dispatch by
+    // command id to keep this stable across languages.
+    if (pick.label.includes(i18n('statusBar.menu.newChat', this.opts.locale))) {
       await this.opts.host.executeCommand('mavis.newChat');
-    } else if (pick.label.startsWith('$(history)')) {
+    } else if (pick.label.includes(i18n('statusBar.menu.switchSession', this.opts.locale).replace('...', '').trim())) {
       await this.opts.host.executeCommand('mavis.switchSession');
-    } else if (pick.label.startsWith('$(robot)')) {
+    } else if (pick.label.includes(i18n('statusBar.menu.switchAgent', this.opts.locale).replace('...', '').trim())) {
       await this.opts.host.executeCommand('mavis.switchAgent');
-    } else if (pick.label.startsWith('$(list-unordered)')) {
+    } else if (pick.label.includes(i18n('statusBar.menu.listSessions', this.opts.locale))) {
       await this.opts.host.executeCommand('mavis.listSessions');
-    } else if (pick.label.startsWith('$(organization)')) {
+    } else if (pick.label.includes(i18n('statusBar.menu.listAgents', this.opts.locale))) {
       await this.opts.host.executeCommand('mavis.listAgents');
-    } else if (pick.label.includes('Sign in')) {
-      await this.opts.host.executeCommand('mavis.signIn');
-    } else if (pick.label.includes('Sign out')) {
+    } else if (this.signedIn) {
       await this.opts.host.executeCommand('mavis.signOut');
+    } else {
+      await this.opts.host.executeCommand('mavis.signIn');
     }
   }
 
@@ -123,10 +136,10 @@ export class StatusBarController {
 
   /** Updates the rendered text. Exposed for tests. */
   render(): void {
-    const sess = this.currentSession ? this.currentSession.slice(0, 8) : '—';
-    const signed = this.signedIn ? '●' : '○';
-    this.item.text = `$(mavis-icon) Mavis: ${this.currentAgent} | ${sess} ${signed}`;
-    this.item.tooltip = `agent: ${this.currentAgent} | session: ${this.currentSession ?? '—'} | signed-in: ${this.signedIn}`;
+    const sess = this.currentSession ? this.currentSession.slice(0, 8) : i18n('statusBar.shortSession', this.opts.locale);
+    const signed = this.signedIn ? i18n('statusBar.signedIn', this.opts.locale) : i18n('statusBar.signedOut', this.opts.locale);
+    this.item.text = i18n('statusBar.text', this.opts.locale, { agent: this.currentAgent, session: sess, signed });
+    this.item.tooltip = i18n('statusBar.tooltip', this.opts.locale, { agent: this.currentAgent, session: this.currentSession ?? '—', signedIn: this.signedIn ? 'true' : 'false' });
   }
 
   dispose(): void {
