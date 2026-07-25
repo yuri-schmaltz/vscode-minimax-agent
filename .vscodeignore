@@ -4,6 +4,7 @@ test/**
 **/*.test.ts
 **/*.spec.ts
 **/*.map
+deliverable.md
 # Webview sources (we ship the built bundle in dist/webview)
 webview/**
 dist/**/*.map

@@ -492,3 +492,59 @@ vscode-minimax-agent/
 4. Cada ciclo termina com `.vsix` instalável pra você testar.
 
 **Diz "bora" e eu já começo pelo passo 1** (research dos 4 itens). Ou se preferir, abre direto a Fase 0 com placeholders pros itens não-resolvidos (vai exigir retrofit depois, mas começa a ver código mais cedo).
+
+---
+
+## 12. Status final (v1, 2026-07-25)
+
+| Fase | Estado | Entregue em |
+|---|---|---|
+| Fase 0 — Esqueleto | ✓ | Ciclo 1 |
+| Fase 1 — Cliente + chat | ✓ | Ciclo 1 |
+| Fase 2 — Sessões & agentes | ✓ | Ciclo 2 |
+| Fase 3 — Code actions | ✓ | Ciclo 2 |
+| Fase 4 — Drive & cron | ✓ | Ciclo 3 |
+| Fase 5 — Polimento | ✓ | Ciclo 4 |
+| Fase 6 (opcional) | ⏸ deferred | pós-v1 |
+
+### Verificação do v1 (Ciclo 4)
+
+- `npm run lint`      ✓
+- `npm run typecheck` ✓
+- `npm test`          267 / 267 passing
+- `npm run package`   ✓ `vscode-agent-0.1.0.vsix` (~400 KB)
+- Cobertura           ≥ 80% stmts / 75% branches (per-file)
+
+### Como o que cada fase entregou (resumo)
+
+- **Fase 0** (Ciclo 1): scaffold TypeScript+esbuild, 7 comandos
+  `mavis.*`, activity bar + secondary bar, configuração completa, CI
+  pipeline.
+- **Fase 1** (Ciclo 1): `MavisClient` com NDJSON streaming, CLI shim
+  Node bundled, OAuth (device-code + PKCE) com `SecretStorage`,
+  status bar reativo, chat webview (React + shiki) com streaming e
+  CSP estrito.
+- **Fase 2** (Ciclo 2): multi-session tabs no chat, `SessionCache`
+  LRU em `globalState`, comandos de switch session/agent, list
+  sessions/agents, status bar com menu de ações.
+- **Fase 3** (Ciclo 2): 6 CodeActions (Explain, Refactor, Generate
+  tests, Add docstring, Find bugs, Custom prompt) com `vscode.Diff`
+  side-by-side e botões Apply / Reject / Send to chat.
+- **Fase 4** (Ciclo 3): `Mavis Drive` tree view com 7 categorias,
+  drag-and-drop com MIME customizado pro chat; `Mavis: Schedule
+  cron` (form multi-step) e `Mavis: List crons` (QuickPick com
+  toggle / delete).
+- **Fase 5** (Ciclo 4): telemetria opt-in (1 notice único, sem
+  PII), i18n en + pt-BR (`t(key, locale, vars?)` + 70+ chaves),
+  settings UI webview (form React persistido em
+  `globalState[mavis.settings]`), marketplace polish (keywords,
+  icon, galleryBanner, CHANGELOG, README, USER_GUIDE, DEV_GUIDE),
+  E2E scaffold `@vscode/test-electron`.
+
+### Pendências pós-v1
+
+- Marketplace publication (decisão #2).
+- VSCode Language Model API (Mavis como provider).
+- Inline edit (Cmd+K estilo Cursor).
+- E2E em CI (precisa runner com VSCode 1.85+).
+- Custom themes / dark-vs-light tweak por workspace.
