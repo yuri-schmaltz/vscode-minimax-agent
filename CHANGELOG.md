@@ -6,6 +6,33 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-07-25 (Ciclo 5 — Fase 6: integração avançada)
+
+### Added
+- **Language Model API** (`src/lm/MavisLMProvider.ts`): the Mavis
+  backend is registered as a `LanguageModelChatProvider` with vendor
+  `mavis`. Consumers select models with
+  `vscode.lm.selectChatModels({ vendor: 'mavis' })`; one model entry
+  is exposed per Mavis agent. Requests open a fresh Mavis session and
+  stream response parts back through the `Progress` callback.
+- **Inline edit (Cmd+K)** (`src/inline/InlineEditProvider.ts`): ghost-text
+  suggestions driven by the Mavis code-action task. Registered for
+  typescript/python/go/rust + a wildcard. Skips files > 100 KB and
+  honors cancellation via a race against a cancel sentinel.
+- **Notebook controller** (`src/notebook/MavisNotebookController.ts`):
+  Jupyter cell execution. Auto-attaches to `jupyter-notebook` and a
+  custom `mavis-notebook` type declared in `contributes.languages`.
+  Empty cells short-circuit with an inline error, errors mid-stream
+  mark the cell failed and surface the message in the cell output.
+- **Tasks provider** (`src/tasks/MavisTaskProvider.ts`): three built-in
+  tasks (`test`, `lint`, `package`) wired to `npm run <script>`,
+  grouped under Test/Clean/Build. Supports pnpm/yarn via
+  `npmCommand` override and forwards the workspace cwd to each task.
+
+### Tests
+- 34 new unit tests across the four modules (8 LM + 9 inline + 7
+  notebook + 10 tasks). All 309 total tests pass.
+
 ## [0.1.0] — 2026-07-25 (Ciclos 1–4)
 
 ### Added
