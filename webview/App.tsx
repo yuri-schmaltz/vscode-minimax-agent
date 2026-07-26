@@ -24,7 +24,7 @@ interface ChatMessage {
 type WebviewToHost =
   | { type: 'ready' }
   | { type: 'newSession'; agent?: string }
-  | { type: 'sendPrompt'; sessionId: string; text: string }
+  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; toolsEnabled?: boolean; contextFiles?: string[] }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'copyToClipboard'; text: string }
@@ -39,6 +39,9 @@ type HostToWebview =
       type: 'assistantMessage';
       delta: { text: string; sessionId: string; ts: number; done?: boolean };
     }
+  | { type: 'reasoning'; content: string; sessionId: string; ts: number }
+  | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
+  | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
   | { type: 'error'; message: string }
   | {
       type: 'history';
@@ -77,6 +80,10 @@ export function App(): JSX.Element {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [tabs, setTabs] = useState<Array<{ id: string; agent: string; title: string; active: boolean }>>([]);
+  const [tools, setTools] = useState<Array<{ id: string; name: string; args: unknown; result?: unknown; status: 'running' | 'done' | 'error' }>>([]);
+  const [reasoning, setReasoning] = useState<string | null>(null);
+  const [mode, setMode] = useState<'builder' | 'plan'>('builder');
+  const [contextFiles] = useState<string[]>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // Wire host → webview messages.
@@ -129,6 +136,31 @@ export function App(): JSX.Element {
         case 'error':
           setPending(false);
           setError(msg.message);
+          break;
+        case 'reasoning':
+          setReasoning((prev) => (prev ? prev + msg.content : msg.content));
+          break;
+        case 'toolCall':
+          setTools((prev) => [
+            ...prev,
+            { id: msg.id, name: msg.name, args: msg.args, status: 'running' },
+          ]);
+          break;
+        case 'toolResult':
+          setTools((prev) =>
+            prev.map((t) =>
+              t.id === msg.id
+                ? {
+                    ...t,
+                    result: msg.result,
+                    status:
+                      msg.result && typeof msg.result === 'object' && 'error' in (msg.result as Record<string, unknown>)
+                        ? 'error'
+                        : 'done',
+                  }
+                : t,
+            ),
+          );
           break;
         case 'apiKeyMissing':
           setError(
@@ -189,9 +221,25 @@ export function App(): JSX.Element {
   const sendDraft = useCallback(() => {
     const text = draft.trim();
     if (!text || !session) return;
-    postToHost({ type: 'sendPrompt', sessionId: session.id, text });
+    postToHost({
+      type: 'sendPrompt',
+      sessionId: session.id,
+      text,
+      mode,
+      toolsEnabled: true,
+      // B.1: chips for @-mentions are not yet wired in the webview
+      // (autocomplete is B.5). The host will accept contextFiles and
+      // forward them to the shim when present.
+      contextFiles: contextFiles,
+    });
     setDraft('');
-  }, [draft, session]);
+    setTools([]);
+    setReasoning(null);
+  }, [draft, session, mode, contextFiles]);
+
+  const toggleMode = useCallback(() => {
+    setMode((m) => (m === 'builder' ? 'plan' : 'builder'));
+  }, []);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -245,6 +293,18 @@ export function App(): JSX.Element {
           </button>
         </div>
         <div className="mavis-header-right">
+          <button
+            type="button"
+            className={'mavis-mode-toggle' + (mode === 'plan' ? ' mavis-mode-plan' : '')}
+            onClick={toggleMode}
+            title={
+              mode === 'builder'
+                ? 'Builder mode (read + tool access). Click to switch to Plan (read-only).'
+                : 'Plan mode (read-only). Click to switch to Builder.'
+            }
+          >
+            {mode === 'builder' ? '🛠 Builder' : '👁 Plan'}
+          </button>
           <button type="button" onClick={newSession} title="New chat">
             New
           </button>
@@ -323,6 +383,35 @@ export function App(): JSX.Element {
         {messages.map((m) => (
           <Message key={m.id} message={m} />
         ))}
+        {reasoning && (
+          <details className="mavis-reasoning">
+            <summary>💭 thinking</summary>
+            <pre>{reasoning}</pre>
+          </details>
+        )}
+        {tools.length > 0 && (
+          <ul className="mavis-tools">
+            {tools.map((t) => (
+              <li
+                key={t.id}
+                className={
+                  'mavis-tool mavis-tool-' +
+                  (t.status === 'running' ? 'running' : t.status === 'error' ? 'error' : 'done')
+                }
+              >
+                <span className="mavis-tool-name">
+                  {t.status === 'running' ? '⏳' : t.status === 'error' ? '✖' : '✓'} {t.name}
+                </span>
+                <code className="mavis-tool-args">{JSON.stringify(t.args)}</code>
+                {t.result !== undefined && (
+                  <pre className="mavis-tool-result">
+                    {typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2).slice(0, 800)}
+                  </pre>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <footer className="mavis-footer">

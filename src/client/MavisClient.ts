@@ -78,6 +78,8 @@ export interface MavisClientOptions {
   apiKey?: string;
   /** Optional callback to receive redacted shim stderr (for Output Channel). */
   onStderr?: (text: string) => void;
+  /** Workspace root (used by tool sandboxing + agent.md lookup). */
+  workspace?: string;
   /** Force mock mode (sets MAVIS_MOCK=1 in env). Defaults to true when archonUrl is empty. */
   mock?: boolean;
   /** Override child_process.spawn (for tests). */
@@ -98,7 +100,7 @@ interface RunningStream {
 }
 
 export class MavisClient {
-  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream' | 'onStderr'>> & {
+  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream' | 'onStderr' | 'workspace'>> & {
     cliPath: string | undefined;
     archonUrl: string | undefined;
     defaultAgent: string | undefined;
@@ -109,6 +111,7 @@ export class MavisClient {
     model: string;
     stream: boolean;
     onStderr?: (text: string) => void;
+    workspace?: string;
   };
   private readonly spawnImpl: typeof spawn;
   private readonly streams = new Set<RunningStream>();
@@ -302,7 +305,7 @@ export class MavisClient {
     const parser = child.stdout!.pipe(new NDJSONParser());
     parser.on('data', (evt: StreamEvent) => {
       const eventType = (evt as { type?: string }).type;
-      if (eventType && (eventType === 'message' || eventType === 'tool_call' || eventType === 'tool_result' || eventType === 'error' || eventType === 'done')) {
+      if (eventType && (eventType === 'message' || eventType === 'tool_call' || eventType === 'tool_result' || eventType === 'reasoning' || eventType === 'error' || eventType === 'done')) {
         emitter.emit(eventType, evt);
       } else if (eventType === 'ready') {
         // Inform listeners via the emitter too.
@@ -339,11 +342,16 @@ export class MavisClient {
     });
 
     const handle: StreamHandle = {
-      sendPrompt: (text: string) => {
+      sendPrompt: (envelope) => {
         if (running.closed) {
           throw new SessionClosedError(sessionId);
         }
-        const msg: PromptMessage = { type: 'prompt', text };
+        // Back-compat: accept a plain string (just the text) or a
+        // structured envelope. B.1+ uses the envelope to forward
+        // tool manifests, mode, and @-mentioned context files.
+        const msg: PromptMessage = typeof envelope === 'string'
+          ? { type: 'prompt', text: envelope }
+          : { type: 'prompt', ...envelope };
         child.stdin.write(JSON.stringify(msg) + '\n');
       },
       close: () => {
@@ -825,6 +833,9 @@ export class MavisClient {
     if (this.options.stream) env.MAVIS_STREAM = '1';
     if (this.options.apiKey) {
       env.MAVIS_API_KEY = this.options.apiKey;
+    }
+    if (this.options.workspace) {
+      env.MAVIS_WORKSPACE = this.options.workspace;
     }
     return {
       env,

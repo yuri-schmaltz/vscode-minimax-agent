@@ -40,6 +40,7 @@ import { MavisLMProvider, MAVIS_LM_VENDOR } from './lm/MavisLMProvider';
 import { MavisInlineCompletionProvider, INLINE_EDIT_SELECTOR } from './inline/InlineEditProvider';
 import { MavisNotebookControllerProvider } from './notebook/MavisNotebookController';
 import { MavisTaskProvider } from './tasks/MavisTaskProvider';
+import { getReadOnlyToolManifest } from './agent/manifest';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
@@ -89,6 +90,7 @@ export function activate(context: ExtensionContext): void {
   // pick the key up on the next spawnEnv() call. We use the key here
   // only when it is already cached in memory.
   const initialApiKey = (context.globalState.get<string>('mavis.cachedApiKey') || undefined);
+  const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.globalStorageUri.fsPath;
 
   client = new MavisClient({
     cliPath,
@@ -100,6 +102,7 @@ export function activate(context: ExtensionContext): void {
     apiKey: initialApiKey,
     extensionPath: context.extensionPath,
     globalStoragePath: context.globalStorageUri.fsPath,
+    workspace: workspaceRoot,
     onStderr: (text) => {
       // Stream shim stderr into the shared Mavis output channel.
       // Each line is prefixed with [mavis:cli] for easy filtering.
@@ -185,6 +188,7 @@ export function activate(context: ExtensionContext): void {
     newSessionId,
     onOpenSettings: () => commands.executeCommand('workbench.action.openSettings', 'mavis'),
     onLog: (line) => mavisOutput?.appendLine(`[mavis:chat] ${line}`),
+    getTools: () => getReadOnlyToolManifest(),
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
     onNewSession: (id: string, agent: string) => {

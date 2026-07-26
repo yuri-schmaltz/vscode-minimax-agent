@@ -33,7 +33,7 @@ import { StreamEvent } from '../client/types';
 export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'newSession'; agent?: string }
-  | { type: 'sendPrompt'; sessionId: string; text: string }
+  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; contextFiles?: string[]; toolsEnabled?: boolean }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'requestSetApiKey' }
@@ -70,6 +70,9 @@ export type HostToWebview =
   | { type: 'sessionChanged'; session: { id: string; agent: string } | null }
   | { type: 'userMessage'; msg: { id: string; text: string; ts: number } }
   | { type: 'assistantMessage'; delta: { text: string; sessionId: string; ts: number; done?: boolean } }
+  | { type: 'reasoning'; content: string; sessionId: string; ts: number }
+  | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
+  | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
   | { type: 'error'; message: string }
   | { type: 'apiKeyMissing' }
   | { type: 'history'; messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }> }
@@ -87,6 +90,14 @@ export interface ChatViewDeps {
   newSessionId: () => string;
   /** Default agent for new sessions. */
   defaultAgent: string;
+  /** Returns the tool manifest for the agent run. If null, no tools
+   * are sent (legacy single-shot chat). B.1+ uses a read-only
+   * manifest; B.2+ adds write tools behind a confirmation flow. */
+  getTools?: () => Array<{
+    name: string;
+    description: string;
+    parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+  }> | null;
   /** LRU list of recent sessions (max 5). When omitted, defaults to []. */
   recentSessions?: () => Array<{ id: string; agent: string; title: string }>;
   /** Called when the user closes a tab in the webview (not the server). */
@@ -335,7 +346,16 @@ export class ChatViewProvider implements WebviewViewProvider {
         const userMsg = { id: 'u_' + Date.now().toString(36), text: msg.text, ts: Date.now() };
         this.postToWebview({ type: 'userMessage', msg: userMsg });
         await this.ensureStream(sessionId);
-        this.currentHandle?.sendPrompt(msg.text);
+        // Build the prompt envelope. When tools are enabled, the
+        // shim runs the agent loop (B.1+); when tools are disabled
+        // the legacy single-shot chat path runs (back-compat).
+        const tools = msg.toolsEnabled !== false ? (this.deps.getTools?.() ?? null) : null;
+        this.currentHandle?.sendPrompt({
+          text: msg.text,
+          tools: tools ?? undefined,
+          mode: msg.mode ?? 'builder',
+          contextFiles: msg.contextFiles ?? [],
+        });
         return;
       }
       case 'loadHistory': {
@@ -413,6 +433,7 @@ export class ChatViewProvider implements WebviewViewProvider {
     this.deps.onLog?.(`[stream] start sessionId=${sessionId}`);
     this.currentHandle = this.deps.client.streamSession(sessionId, {
       message: (e) => this.onStreamEvent('message', e),
+      reasoning: (e) => this.onStreamEvent('reasoning', e),
       tool_call: (e) => this.onStreamEvent('tool_call', e),
       tool_result: (e) => this.onStreamEvent('tool_result', e),
       error: (e) => this.onStreamEvent('error', e),
@@ -421,7 +442,7 @@ export class ChatViewProvider implements WebviewViewProvider {
     this.deps.client.setActiveAgent(this.currentSession?.agent ?? this.deps.defaultAgent);
   }
 
-  private onStreamEvent(kind: 'message' | 'tool_call' | 'tool_result' | 'error' | 'done', e: StreamEvent): void {
+  private onStreamEvent(kind: 'message' | 'reasoning' | 'tool_call' | 'tool_result' | 'error' | 'done', e: StreamEvent): void {
     if (kind === 'error') {
       const evt = e as { type: 'error'; message: string; sessionId?: string };
       this.deps.onLog?.(`[stream] error sessionId=${evt.sessionId ?? '?'} ${evt.message}`);
@@ -451,6 +472,42 @@ export class ChatViewProvider implements WebviewViewProvider {
           ts: evt.ts ?? Date.now(),
           done: false,
         },
+      });
+      return;
+    }
+    if (kind === 'reasoning') {
+      const evt = e as { type: 'reasoning'; content: string; sessionId?: string; ts?: number };
+      this.postToWebview({
+        type: 'reasoning',
+        content: evt.content,
+        sessionId: evt.sessionId ?? this.currentSession?.id ?? '',
+        ts: evt.ts ?? Date.now(),
+      });
+      return;
+    }
+    if (kind === 'tool_call') {
+      const evt = e as { type: 'tool_call'; id?: string; name: string; args: unknown; sessionId?: string; ts?: number };
+      this.deps.onLog?.(`[stream] tool_call name=${evt.name}`);
+      this.postToWebview({
+        type: 'toolCall',
+        id: evt.id ?? '',
+        name: evt.name,
+        args: evt.args,
+        sessionId: evt.sessionId ?? this.currentSession?.id ?? '',
+        ts: evt.ts ?? Date.now(),
+      });
+      return;
+    }
+    if (kind === 'tool_result') {
+      const evt = e as { type: 'tool_result'; id?: string; name: string; result: unknown; sessionId?: string; ts?: number };
+      this.deps.onLog?.(`[stream] tool_result name=${evt.name}`);
+      this.postToWebview({
+        type: 'toolResult',
+        id: evt.id ?? '',
+        name: evt.name,
+        result: evt.result,
+        sessionId: evt.sessionId ?? this.currentSession?.id ?? '',
+        ts: evt.ts ?? Date.now(),
       });
       return;
     }

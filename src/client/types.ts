@@ -10,6 +10,7 @@
 export type StreamEvent =
   | { type: 'ready'; sessionId: string; mock?: boolean; ts?: number }
   | { type: 'message'; role: 'assistant' | 'system' | 'tool'; content: string; sessionId?: string; ts?: number }
+  | { type: 'reasoning'; content: string; sessionId?: string; ts?: number }
   | { type: 'tool_call'; name: string; args: unknown; id?: string; sessionId?: string; ts?: number }
   | { type: 'tool_result'; name: string; result: unknown; id?: string; sessionId?: string; ts?: number }
   | { type: 'error'; message: string; code?: string; sessionId?: string; ts?: number }
@@ -20,6 +21,7 @@ export type StreamEvent =
 /** Event types a consumer can subscribe to (subset of StreamEvent). */
 export type ClientEvent =
   | 'message'
+  | 'reasoning'
   | 'tool_call'
   | 'tool_result'
   | 'error'
@@ -44,6 +46,18 @@ export interface SessionSummary {
 export interface PromptMessage {
   type: 'prompt';
   text: string;
+  /** Optional tool manifest. When present, the shim runs the agent
+   * loop (call model → execute tool_calls → feed back). B.1. */
+  tools?: Array<{
+    name: string;
+    description: string;
+    parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+  }>;
+  /** 'builder' (default) or 'plan'. Controls the system prompt. */
+  mode?: 'builder' | 'plan';
+  /** Files mentioned via @filename. Their contents are injected as
+   * a system message so the model has the file context. */
+  contextFiles?: string[];
 }
 
 /** What the consumer (webview) receives. */
@@ -56,7 +70,7 @@ export interface AssistantMessage {
 
 /** Handle returned from `streamSession`. */
 export interface StreamHandle {
-  sendPrompt(text: string): void;
+  sendPrompt(envelope: { text: string; tools?: PromptMessage['tools']; mode?: PromptMessage['mode']; contextFiles?: PromptMessage['contextFiles'] } | string): void;
   close(): void;
   on(event: ClientEvent, listener: (e: StreamEvent) => void): () => void;
   off(event: ClientEvent, listener: (e: StreamEvent) => void): void;

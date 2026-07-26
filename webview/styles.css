@@ -302,3 +302,86 @@ body,
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* B.1 — Mode toggle (Builder/Plan) */
+.mavis-mode-toggle {
+  background: var(--vscode-button-secondaryBackground, #3a3a3a);
+  color: var(--vscode-button-secondaryForeground, #ddd);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-right: 6px;
+}
+.mavis-mode-toggle.mavis-mode-plan {
+  background: var(--vscode-inputValidation-warningBackground, #5a4a00);
+  color: var(--vscode-inputValidation-warningForeground, #ffd66b);
+}
+
+/* B.1 — Reasoning block (collapsible) */
+.mavis-reasoning {
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border-left: 2px solid var(--mavis-accent, #5e9ed6);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #999);
+}
+.mavis-reasoning summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+}
+.mavis-reasoning pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* B.1 — Tool calls (one <li> per call) */
+.mavis-tools {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mavis-tool {
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border-left: 3px solid var(--vscode-inputValidation-infoBorder, #5e9ed6);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.mavis-tool-running { border-left-color: var(--mavis-accent, #5e9ed6); }
+.mavis-tool-done { border-left-color: #3fb950; }
+.mavis-tool-error { border-left-color: #f85149; }
+.mavis-tool-name { font-weight: 600; }
+.mavis-tool-args {
+  display: inline-block;
+  background: rgba(255,255,255,0.05);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.mavis-tool-result {
+  margin: 4px 0 0 0;
+  padding: 4px 6px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}

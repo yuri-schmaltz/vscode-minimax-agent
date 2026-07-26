@@ -436,6 +436,10 @@ async function cmdSessionStream() {
     }
     if (prompt.type && prompt.type !== 'prompt') continue;
     const text = String(prompt.text || '');
+    const toolList = Array.isArray(prompt.tools) ? prompt.tools : null;
+    const useAgent = toolList && toolList.length > 0;
+    const mode = typeof prompt.mode === 'string' ? prompt.mode : 'builder';
+    const contextFiles = Array.isArray(prompt.contextFiles) ? prompt.contextFiles : [];
 
     if (MOCK) {
       // Simulate a streaming response: emit one chunk then a "done" per prompt.
@@ -449,6 +453,25 @@ async function cmdSessionStream() {
       });
       await sleep(rand(50, 200));
       emit({ type: 'message', role: 'assistant', content: ' ✔', sessionId, ts: nowTs() });
+    } else if (useAgent) {
+      // ----------------------------------------------------------------
+      // Agent loop (Fase B.1).
+      //
+      // Single-turn tool calling is pointless for "vibe coding" — the
+      // model needs to see tool results, decide what to do next, and
+      // either call another tool or emit a final answer. We loop here
+      // until the model emits a `finish_reason` of 'stop' (or a max
+      // iteration guard kicks in). Each step is emitted as
+      // `tool_call` / `tool_result` events so the webview can render
+      // the agent's reasoning in real time.
+      // ----------------------------------------------------------------
+      await runAgentLoop({
+        text,
+        tools: toolList,
+        mode,
+        contextFiles,
+        sessionId,
+      });
     } else {
       // Real path: OpenAI-compatible /chat/completions. Defaults to
       // non-streaming because the MiniMax SSE format trips up the parser
@@ -614,6 +637,426 @@ async function cmdSessionStream() {
     // clear the pending flag and unblock the UI.
     emit({ type: 'done', sessionId });
   }
+}
+
+// ============================================================================
+// Tool infrastructure (Fase B.1 — read-only tools).
+//
+// The shim receives a JSON tool manifest from the host (via the
+// `tools` field of the prompt envelope), forwards it to the model as
+// OpenAI-style `tools: [...]`, and when the model returns tool_calls
+// the shim executes them locally (sandboxed to the workspace root)
+// and feeds the results back to the model until the model emits a
+// final assistant message. Every step is emitted as a structured
+// event so the webview can render the agent's reasoning in real time.
+// ============================================================================
+
+const TOOL_PROTOCOL_VERSION = 1;
+
+function toolManifest() {
+  // The manifest the host sends. In B.1 it's read-only; B.2 adds
+  // write_file / edit_file behind a confirmation flag.
+  return {
+    version: TOOL_PROTOCOL_VERSION,
+    tools: [
+      {
+        name: 'read_file',
+        description: 'Read the contents of a file in the workspace. Returns up to 2000 lines; for larger files, use grep or read with line ranges.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Path relative to the workspace root.' },
+            startLine: { type: 'integer', description: 'Optional 0-based start line.' },
+            endLine: { type: 'integer', description: 'Optional 0-based end line (exclusive).' },
+          },
+          required: ['path'],
+        },
+      },
+      {
+        name: 'glob',
+        description: 'Find files by pattern, e.g. "**/*.ts" or "src/**/*.test.ts". Returns absolute paths.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Glob pattern, relative to workspace root.' },
+            limit: { type: 'integer', description: 'Max results (default 200).' },
+          },
+          required: ['pattern'],
+        },
+      },
+      {
+        name: 'grep',
+        description: 'Search for a regex in files under a directory. Returns matches as "path:line:content".',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Regex pattern (JavaScript syntax).' },
+            path: { type: 'string', description: 'Directory or file to search in (default: workspace root).' },
+            limit: { type: 'integer', description: 'Max matches (default 200).' },
+          },
+          required: ['pattern'],
+        },
+      },
+      {
+        name: 'list_directory',
+        description: 'List the contents of a directory (non-recursive).',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Directory relative to workspace root (default: ".").' },
+          },
+        },
+      },
+    ],
+  };
+}
+
+// Resolve a tool path against the workspace root and reject any
+// attempt to escape via "..", absolute paths, or symlinks. Returns
+// the absolute path on success, or throws an Error.
+function resolveToolPath(input, label) {
+  const root = process.env.MAVIS_WORKSPACE || process.cwd();
+  const rootReal = fs.realpathSync(root);
+  let target;
+  if (path.isAbsolute(input)) {
+    // Absolute paths are allowed only if they live under the workspace.
+    target = path.normalize(input);
+  } else {
+    target = path.join(rootReal, input);
+  }
+  const targetReal = fs.realpathSync(target);
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) {
+    throw new Error(`${label}: path escapes workspace (${input})`);
+  }
+  return targetReal;
+}
+
+function toolReadFile(args) {
+  const filePath = resolveToolPath(args.path, 'read_file');
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n');
+  const start = typeof args.startLine === 'number' ? Math.max(0, args.startLine) : 0;
+  const end = typeof args.endLine === 'number' ? Math.min(lines.length, args.endLine) : lines.length;
+  const slice = lines.slice(start, end).join('\n');
+  return {
+    path: args.path,
+    totalLines: lines.length,
+    startLine: start,
+    endLine: end,
+    content: slice,
+    truncated: end - start < lines.length,
+  };
+}
+
+function toolGlob(args) {
+  const root = process.env.MAVIS_WORKSPACE || process.cwd();
+  const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 200;
+  // Use the host-provided pattern directly; ripgrep would be faster
+  // but adding it as a dep just for this is overkill. Node's fs
+  // walk is fine for <10k files which is the realistic case.
+  const matched = [];
+  const re = globToRegex(args.pattern);
+  walk(root, (abs, stat) => {
+    if (!stat.isFile()) return;
+    if (matched.length >= limit) return;
+    const rel = path.relative(root, abs);
+    if (re.test(rel)) matched.push(rel);
+  });
+  return { pattern: args.pattern, count: matched.length, paths: matched };
+}
+
+function globToRegex(pattern) {
+  // Convert a basic glob (**/*.ts) to a regex. Handles *, **, ?.
+  // Doesn't handle brace expansion or extglob; that's fine for B.1.
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') {
+      if (pattern[i + 1] === '*') {
+        re += '.*';
+        i++; // skip the second *
+        if (pattern[i + 1] === '/') i++; // and the separator
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else if ('.+^$()|{}[]\\'.includes(c)) {
+      re += '\\' + c;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp('^' + re + '$');
+}
+
+function walk(dir, visit) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return; // EACCES, ENOENT, etc. — skip silently
+  }
+  for (const ent of entries) {
+    if (ent.name === 'node_modules' || ent.name === '.git' || ent.name.startsWith('.')) continue;
+    const abs = path.join(dir, ent.name);
+    let stat;
+    try { stat = fs.statSync(abs); } catch { continue; }
+    visit(abs, stat);
+    if (stat.isDirectory()) walk(abs, visit);
+  }
+}
+
+function toolGrep(args) {
+  const root = process.env.MAVIS_WORKSPACE || process.cwd();
+  const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 200;
+  let re;
+  try { re = new RegExp(args.pattern, 'i'); }
+  catch (err) { throw new Error(`grep: invalid regex: ${err.message}`); }
+  const baseDir = args.path ? resolveToolPath(args.path, 'grep') : root;
+  const matches = [];
+  walk(baseDir, (abs, stat) => {
+    if (!stat.isFile() || matches.length >= limit) return;
+    let content;
+    try { content = fs.readFileSync(abs, 'utf8'); }
+    catch { return; } // binary or unreadable
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (matches.length >= limit) break;
+      if (re.test(lines[i])) {
+        const rel = path.relative(root, abs);
+        matches.push({ path: rel, line: i + 1, content: lines[i] });
+      }
+    }
+  });
+  return { pattern: args.pattern, path: args.path || '.', count: matches.length, matches };
+}
+
+function toolListDirectory(args) {
+  const dir = resolveToolPath(args.path || '.', 'list_directory');
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  return {
+    path: args.path || '.',
+    entries: entries.map((e) => ({
+      name: e.name,
+      kind: e.isDirectory() ? 'directory' : e.isFile() ? 'file' : 'other',
+    })),
+  };
+}
+
+function executeTool(name, args) {
+  // Whitelist: B.1 is read-only. Write tools (write_file, edit_file)
+  // are added in B.2 with a confirmation flow.
+  const registry = {
+    read_file: toolReadFile,
+    glob: toolGlob,
+    grep: toolGrep,
+    list_directory: toolListDirectory,
+  };
+  const fn = registry[name];
+  if (!fn) {
+    throw new Error(`unknown tool: ${name}`);
+  }
+  return fn(args || {});
+}
+
+function openaiToolSchema(tools) {
+  // Convert our flat tool manifest to OpenAI's chat.completions
+  // `tools: [{type: 'function', function: {name, description, parameters}}]`
+  return tools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
+}
+
+// Build the system prompt for an agent run. Mode controls whether
+// the model is allowed to (claim to) write files; agent.md (if
+// present) gives the model project-specific context.
+function buildSystemPrompt(mode, agentMd) {
+  const modeBlock = mode === 'plan'
+    ? `MODE: PLAN (read-only).
+You CANNOT write, edit, or run commands. Do NOT attempt to call tools like write_file, edit_file, or bash — they are not available in this mode.
+When the user asks for changes, explain what would be needed and tell them to switch to Builder mode (they can toggle the mode in the chat header).`
+    : `MODE: BUILDER.
+You have read-only tools (read_file, glob, grep, list_directory). Use them to investigate the codebase before answering.
+Be precise. Cite file paths and line numbers when you reference code.`;
+  const agentBlock = agentMd
+    ? `\n\nPROJECT INSTRUCTIONS (from agent.md):\n${agentMd}\n`
+    : '';
+  return `You are Mavis, a coding assistant for VS Code.\n${modeBlock}${agentBlock}`;
+}
+
+// Read agent.md from the workspace root, if present. Caps at 16 KB
+// to avoid blowing the context window.
+function loadAgentMd() {
+  const root = process.env.MAVIS_WORKSPACE || process.cwd();
+  const candidate = path.join(root, 'agent.md');
+  try {
+    if (!fs.existsSync(candidate)) return null;
+    const content = fs.readFileSync(candidate, 'utf8');
+    if (content.length > 16 * 1024) {
+      return content.slice(0, 16 * 1024) + '\n\n[... truncated, full file is larger ...]';
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+// Read each file listed in contextFiles (max 8 files, max 32 KB
+// each) and return their contents as a system message fragment.
+function loadContextFiles(paths) {
+  if (!paths || paths.length === 0) return null;
+  const root = process.env.MAVIS_WORKSPACE || process.cwd();
+  const blocks = [];
+  for (const rel of paths.slice(0, 8)) {
+    try {
+      const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+      const real = fs.realpathSync(abs);
+      const rootReal = fs.realpathSync(root);
+      if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
+        blocks.push(`--- ${rel} ---\n[skipped: outside workspace]`);
+        continue;
+      }
+      const content = fs.readFileSync(real, 'utf8');
+      const capped = content.length > 32 * 1024 ? content.slice(0, 32 * 1024) + '\n[... truncated ...]' : content;
+      blocks.push(`--- ${rel} ---\n${capped}`);
+    } catch (err) {
+      blocks.push(`--- ${rel} ---\n[error reading file: ${err.message}]`);
+    }
+  }
+  if (blocks.length === 0) return null;
+  return `The user mentioned these files. Use them as context:\n\n${blocks.join('\n\n')}`;
+}
+
+// Run one agent loop: call the model, execute any tool_calls, feed
+// results back, repeat until the model emits a final answer or we
+// hit the iteration cap. Non-streaming model calls only (tool_calls
+// in deltas need careful accumulator logic that's deferred to a
+// later phase; non-streaming is good enough for B.1).
+async function runAgentLoop({ text, tools, mode, contextFiles, sessionId }) {
+  const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
+  const openaiTools = openaiToolSchema(tools);
+  const agentMd = loadAgentMd();
+  const systemPrompt = buildSystemPrompt(mode, agentMd);
+  const contextBlock = loadContextFiles(contextFiles);
+
+  const messages = [{ role: 'system', content: systemPrompt }];
+  if (contextBlock) messages.push({ role: 'system', content: contextBlock });
+  messages.push({ role: 'user', content: text });
+
+  const MAX_ITER = 8; // safety cap on tool-call loops
+  let iter = 0;
+  let lastContent = '';
+  let emittedAny = false;
+  let usage = null;
+
+  while (iter < MAX_ITER) {
+    iter += 1;
+    logErr(`agent iter=${iter} messages=${messages.length} tools=${openaiTools.length}`);
+    let res;
+    try {
+      res = await archonFetch('/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          stream: false,
+          messages,
+          tools: openaiTools,
+          tool_choice: 'auto',
+        }),
+      });
+    } catch (err) {
+      const raw = (err && err.message) || String(err);
+      const m = /->\s*(\d{3})\s*:\s*(\{[\s\S]*\})/.exec(raw);
+      if (m && m[1] === '402' && /insufficient_balance_error/.test(m[2])) {
+        emit({ type: 'error', message: 'Conta MiniMax sem saldo. Adicione créditos em platform.minimax.io/user-center/payment/token-plan para usar o chat.', sessionId, ts: nowTs() });
+      } else {
+        emit({ type: 'error', message: raw, sessionId, ts: nowTs() });
+      }
+      return;
+    }
+
+    const body = await res.text();
+    let json;
+    try { json = JSON.parse(body); }
+    catch {
+      emit({ type: 'error', message: 'archon /chat/completions returned non-JSON: ' + body.slice(0, 200), sessionId, ts: nowTs() });
+      return;
+    }
+
+    if (json.usage && typeof json.usage === 'object') usage = json.usage;
+    const choice = Array.isArray(json.choices) ? json.choices[0] : null;
+    if (!choice) {
+      emit({ type: 'error', message: 'archon returned no choices', sessionId, ts: nowTs() });
+      return;
+    }
+    const msg = choice.message || {};
+    const finishReason = choice.finish_reason || 'stop';
+
+    // Emit any text content the model produced (could be alongside
+    // tool_calls, in which case it's usually reasoning).
+    if (typeof msg.content === 'string' && msg.content.length > 0) {
+      lastContent = msg.content;
+      emit({ type: 'message', role: 'assistant', content: msg.content, sessionId, ts: nowTs() });
+      emittedAny = true;
+    } else if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
+      // Surface reasoning as a separate event so the UI can render
+      // it in a collapsible "thinking" block (B.5 polish).
+      emit({ type: 'reasoning', content: msg.reasoning_content, sessionId, ts: nowTs() });
+    }
+
+    // No tool calls → we're done.
+    if (!Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) {
+      break;
+    }
+
+    // Append the assistant message (with tool_calls) to history.
+    messages.push({
+      role: 'assistant',
+      content: msg.content || '',
+      tool_calls: msg.tool_calls.map((tc) => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.function.name, arguments: tc.function.arguments },
+      })),
+    });
+
+    // Execute each tool_call and append the result.
+    for (const tc of msg.tool_calls) {
+      const name = tc.function && tc.function.name;
+      let args = {};
+      try { args = tc.function && tc.function.arguments ? JSON.parse(tc.function.arguments) : {}; }
+      catch (err) {
+        emit({ type: 'error', message: `tool ${name}: bad arguments JSON (${err.message})`, sessionId, ts: nowTs() });
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: 'bad arguments: ' + err.message }) });
+        continue;
+      }
+      emit({ type: 'tool_call', id: tc.id, name, args, sessionId, ts: nowTs() });
+      let result;
+      try {
+        result = executeTool(name, args);
+      } catch (err) {
+        result = { error: (err && err.message) || String(err) };
+      }
+      emit({ type: 'tool_result', id: tc.id, name, result, sessionId, ts: nowTs() });
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+    }
+
+    // Loop back: call model again with updated history.
+  }
+
+  if (iter >= MAX_ITER) {
+    emit({ type: 'error', message: `agent loop hit max iterations (${MAX_ITER}); last content: ${lastContent.slice(0, 200)}`, sessionId, ts: nowTs() });
+  }
+  if (!emittedAny && lastContent === '') {
+    emit({ type: 'error', message: 'agent returned no assistant content', sessionId, ts: nowTs() });
+  }
+  if (usage) emit({ type: 'usage', usage, sessionId, ts: nowTs() });
 }
 
 function cmdSessionNew() {

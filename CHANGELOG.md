@@ -6,6 +6,62 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-07-26 (Fase B.1: agent loop com 4 tools read-only + agent.md + mode Builder/Plan)
+
+### Added
+- **Agent loop (Fase B.1)**: o shim agora roda o loop completo do
+  agente — chama o model com o manifesto de tools, executa os
+  `tool_calls` retornados, alimenta o resultado de volta pro model,
+  e repete até o model emitir uma resposta final (ou atingir
+  `MAX_ITER=8`). Antes era single-shot, agora é multi-turn.
+- **4 read-only tools** implementados no shim (sandboxed ao
+  workspace root, com `realpathSync` pra bloquear `..` traversal):
+  - `read_file(path, startLine?, endLine?)` — lê arquivo com line range opcional
+  - `glob(pattern, limit?)` — encontra arquivos por glob
+  - `grep(pattern, path?, limit?)` — regex com line numbers
+  - `list_directory(path?)` — lista diretório não-recursive
+- **agent.md loader**: shim lê `<workspace>/agent.md` no início de
+  cada agent run e injeta no system prompt (cap em 16 KB).
+  Permite dar contexto de projeto (convenções, estrutura) sem
+  ficar colando no chat.
+- **@filename context**: o envelope do prompt agora aceita
+  `contextFiles: string[]`. Os arquivos são lidos e injetados como
+  system message (cap 8 files, 32 KB cada). B.5 adiciona o
+  autocomplete no webview; B.1 já aceita a lista.
+- **Builder/Plan mode toggle** no header do chat (botão novo).
+  Em Plan mode, o system prompt instrui o model a não chamar
+  tools destrutivos (que nem estão no manifesto B.1).
+- **Tool calls visíveis no chat**: chips inline com nome da tool,
+  args, e resultado. Status `running` (⏳) / `done` (✓) / `error` (✖).
+- **Reasoning block**: o `reasoning_content` do model vira um
+  `<details>` colapsável no chat.
+- **`getTools()` dep** no ChatViewProvider + **`getReadOnlyToolManifest()`**
+  em `src/agent/manifest.ts` — single source of truth pra tools.
+- 10 testes novos (`test/shim/tools.test.cjs` cobre as 4 tools +
+  `agent.md`; `test/shim/agentLoop.test.cjs` cobre o loop end-to-end
+  com um fake archon server retornando `tool_calls` + content).
+- 329/329 tests passam, tsc + esbuild clean.
+
+### Architecture
+- Tool manifest definido em **um lugar** (host) e enviado no
+  envelope do `sendPrompt`. Backward-compat: se o host não
+  passar tools, o shim usa o caminho single-shot antigo.
+- Workspace root (`workspace.workspaceFolders[0]`) passado pro
+  shim via `MAVIS_WORKSPACE`. Usado pelo `resolveToolPath` e
+  pelo `loadAgentMd`.
+- Path traversal protection via `fs.realpathSync` + prefix
+  check — paths absolutos fora do workspace são rejeitados.
+
+### Deferred to Fase B.2+
+- Write tools (`write_file`, `edit_file`) com confirmation flow
+- Inline diff viewer
+- Bash tool (com allowlist + timeout)
+- @filename autocomplete no webview
+- Quota widget (`/v1/coding_plan/remains`)
+- Themes
+- MCP server support
+
+## [0.3.12] — 2026-07-26 (FIX CRÍTICO: shim travava esperando stdin fechar — chat respondia depois de 15s com timeout)
 ## [0.3.12] — 2026-07-26 (FIX CRÍTICO: shim travava esperando stdin fechar — chat respondia depois de 15s com timeout)
 
 ### Fixed
