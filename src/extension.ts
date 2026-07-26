@@ -374,8 +374,9 @@ export function activate(context: ExtensionContext): void {
       statusBar?.render?.();
     }),
     commands.registerCommand('mavis.testConnection', async () => {
-      // Diagnóstico: bate no /v1/models e mostra exatamente o que o
-      // servidor responde. Usa a chave persistida; se não tiver, pede.
+      // Diagnóstico: bate em /v1/models E /v1/chat/completions (não-stream)
+      // e mostra exatamente o que o servidor responde. Usa a chave
+      // persistida; se não tiver, pede.
       if (!client) {
         window.showErrorMessage('Mavis: cliente não inicializou ainda. Tenta recarregar a janela.');
         return;
@@ -396,20 +397,25 @@ export function activate(context: ExtensionContext): void {
         }
         return;
       }
-      // Bate no endpoint /v1/models. O shim sabe qual URL é
-      // (archonUrl + apiBase). Devolve as 3 primeiras linhas
-      // + status code pra diagnóstico rápido.
       const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
       const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
-      const url = archonUrl.replace(/\/+$/, '') + apiBase + '/models';
+      const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
       const output = window.createOutputChannel('Mavis');
       output.clear();
-      output.appendLine(`[mavis] GET ${url}`);
-      output.appendLine(`[mavis] Authorization: Bearer ${key.slice(0, 8)}…${key.slice(-4)} (length=${key.length})`);
+      output.appendLine(`[mavis] === Diagnóstico de conexão Mavis ===`);
+      output.appendLine(`[mavis] archonUrl: ${archonUrl}`);
+      output.appendLine(`[mavis] apiBase:   ${apiBase}`);
+      output.appendLine(`[mavis] model:     ${model}`);
+      output.appendLine(`[mavis] key:       ${key.slice(0, 10)}…${key.slice(-4)} (length=${key.length})`);
+
+      // Round 1: GET /v1/models
+      const modelsUrl = archonUrl.replace(/\/+$/, '') + apiBase + '/models';
+      output.appendLine('');
+      output.appendLine(`[mavis] --- 1) GET ${modelsUrl} ---`);
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 15_000);
-        const res = await globalThis.fetch(url, {
+        const res = await globalThis.fetch(modelsUrl, {
           method: 'GET',
           headers: { authorization: 'Bearer ' + key },
           signal: ctrl.signal,
@@ -417,32 +423,76 @@ export function activate(context: ExtensionContext): void {
         clearTimeout(timer);
         output.appendLine(`[mavis] HTTP ${res.status} ${res.statusText}`);
         const body = await res.text();
-        const sample = body.length > 600 ? body.slice(0, 600) + '…(truncated)' : body;
-        output.appendLine('[mavis] Body:');
-        output.appendLine(sample);
         if (res.status === 200) {
           try {
             const json = JSON.parse(body);
             if (json && Array.isArray(json.data)) {
-              const models = json.data.map((m: { id?: string }) => m.id).filter(Boolean).slice(0, 8);
-              output.appendLine(`[mavis] Models advertised: ${models.join(', ')}`);
+              const models = json.data.map((m: { id?: string }) => m.id).filter(Boolean).slice(0, 12);
+              output.appendLine(`[mavis] Models: ${models.join(', ')}${json.data.length > 12 ? '…' : ''}`);
             }
-          } catch {
-            /* not JSON, ignore */
-          }
-          window.showInformationMessage(`Mavis: conexão OK. HTTP ${res.status}. Veja "Mavis" no Output.`);
-        } else if (res.status === 401 || res.status === 403) {
-          window.showErrorMessage(`Mavis: chave rejeitada (HTTP ${res.status}). Confere se a Subscription Key é válida.`);
-        } else if (res.status === 404) {
-          window.showErrorMessage(`Mavis: endpoint não encontrado (HTTP ${res.status}). Tenta mudar \`mavis.archonUrl\` ou \`mavis.apiBase\`.`);
+          } catch { /* not JSON, ignore */ }
         } else {
-          window.showWarningMessage(`Mavis: resposta inesperada HTTP ${res.status}. Veja Output.`);
+          output.appendLine(`[mavis] Body: ${body.slice(0, 400)}`);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         output.appendLine(`[mavis] Network error: ${msg}`);
-        window.showErrorMessage(`Mavis: falha de rede — ${msg}`);
       }
+
+      // Round 2: POST /v1/chat/completions (não-stream, payload mínimo)
+      const chatUrl = archonUrl.replace(/\/+$/, '') + apiBase + '/chat/completions';
+      output.appendLine('');
+      output.appendLine(`[mavis] --- 2) POST ${chatUrl} (non-stream) ---`);
+      const chatBody = JSON.stringify({
+        model,
+        stream: false,
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'olá' }],
+      });
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30_000);
+        const res = await globalThis.fetch(chatUrl, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + key,
+            'content-type': 'application/json',
+          },
+          body: chatBody,
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        output.appendLine(`[mavis] HTTP ${res.status} ${res.statusText}`);
+        const body = await res.text();
+        if (res.status === 200) {
+          try {
+            const json = JSON.parse(body);
+            const text = json.choices?.[0]?.message?.content || json.choices?.[0]?.text || '(sem content)';
+            output.appendLine(`[mavis] Content: ${String(text).slice(0, 200)}`);
+            window.showInformationMessage(`Mavis: chat OK. Resposta: "${String(text).slice(0, 60)}"`);
+          } catch {
+            output.appendLine(`[mavis] Body (raw): ${body.slice(0, 400)}`);
+          }
+        } else {
+          output.appendLine(`[mavis] Body: ${body.slice(0, 400)}`);
+          if (res.status === 401 || res.status === 403) {
+            window.showErrorMessage(`Mavis: chave rejeitada no chat (HTTP ${res.status}).`);
+          } else if (res.status === 404) {
+            window.showErrorMessage(`Mavis: endpoint de chat não encontrado (HTTP ${res.status}).`);
+          } else if (res.status === 429) {
+            window.showWarningMessage(`Mavis: rate-limited (HTTP 429). Aguarde alguns segundos.`);
+          } else {
+            window.showWarningMessage(`Mavis: chat respondeu HTTP ${res.status}. Veja Output.`);
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        output.appendLine(`[mavis] Network error: ${msg}`);
+        window.showErrorMessage(`Mavis: falha de rede no chat — ${msg}`);
+      }
+
+      output.appendLine('');
+      output.appendLine(`[mavis] === Fim ===`);
       output.show(true);
     }),
     commands.registerCommand('mavis.welcome', async () => {
