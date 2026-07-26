@@ -403,7 +403,21 @@ async function cmdSessionStream() {
           }),
         });
       } catch (err) {
-        emit({ type: 'error', message: (err && err.message) || String(err), sessionId, ts: nowTs() });
+        const raw = (err && err.message) || String(err);
+        // Detect the specific MiniMax "insufficient balance" 402
+        // and surface a friendlier hint. Other errors pass through
+        // as-is.
+        const m = /->\s*(\d{3})\s*:\s*(\{[\s\S]*\})/.exec(raw);
+        if (m && m[1] === '402' && /insufficient_balance_error/.test(m[2])) {
+          emit({
+            type: 'error',
+            message: 'Conta MiniMax sem saldo. Adicione créditos em platform.minimax.io/user-center/payment/token-plan para usar o chat.',
+            sessionId,
+            ts: nowTs(),
+          });
+        } else {
+          emit({ type: 'error', message: raw, sessionId, ts: nowTs() });
+        }
         continue;
       }
       if (!res.body) {

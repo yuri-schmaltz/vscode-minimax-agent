@@ -481,6 +481,10 @@ export function activate(context: ExtensionContext): void {
             window.showErrorMessage(`Mavis: endpoint de chat não encontrado (HTTP ${res.status}).`);
           } else if (res.status === 429) {
             window.showWarningMessage(`Mavis: rate-limited (HTTP 429). Aguarde alguns segundos.`);
+          } else if (res.status === 402 && /insufficient_balance_error/.test(body)) {
+            window.showWarningMessage(
+              `Mavis: conta sem saldo. Adicione créditos em platform.minimax.io/user-center/payment/token-plan.`,
+            );
           } else {
             window.showWarningMessage(`Mavis: chat respondeu HTTP ${res.status}. Veja Output.`);
           }
