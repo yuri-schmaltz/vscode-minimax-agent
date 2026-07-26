@@ -413,6 +413,8 @@ async function cmdSessionStream() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf8');
       let buffer = '';
+      let messageCount = 0;
+      let usage = null;
       try {
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -436,9 +438,19 @@ async function cmdSessionStream() {
               const json = JSON.parse(payload);
               const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
               const delta = choice && choice.delta ? choice.delta : {};
-              const content = typeof delta.content === 'string' ? delta.content : '';
+              // OpenAI-compat: most servers use `content`. MiniMax M3
+              // sometimes streams reasoning via `reasoning_content`
+              // when thinking is enabled — surface it too so the user
+              // sees the model's thought process.
+              const content = typeof delta.content === 'string' && delta.content.length > 0
+                ? delta.content
+                : (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '');
               if (content) {
+                messageCount += 1;
                 emit({ type: 'message', role: 'assistant', content, sessionId, ts: nowTs() });
+              }
+              if (json.usage && typeof json.usage === 'object') {
+                usage = json.usage;
               }
             } catch {
               // Ignore malformed SSE chunks; upstream may inject comments.
@@ -447,6 +459,26 @@ async function cmdSessionStream() {
         }
       } finally {
         try { reader.releaseLock(); } catch { /* ignore */ }
+      }
+      if (messageCount === 0) {
+        // The server returned 200 but no content streamed. Two likely
+        // causes: (a) the model finished a refusal that didn't carry
+        // any text, or (b) the response is non-streaming JSON. Try to
+        // surface something so the user isn't staring at a silent chat.
+        let hint = 'archon returned 200 with no streamed content';
+        try {
+          const tail = await res.clone().text();
+          if (tail && tail.length > 0) {
+            const sample = tail.slice(0, 200);
+            hint = `archon returned 200 with no streamed content. Body sample: ${sample}`;
+          }
+        } catch {
+          /* ignore */
+        }
+        emit({ type: 'error', message: hint, sessionId, ts: nowTs() });
+      }
+      if (usage) {
+        emit({ type: 'usage', usage, sessionId, ts: nowTs() });
       }
     }
   }

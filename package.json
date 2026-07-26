@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -57,6 +57,11 @@
       {
         "command": "mavis.setApiKey",
         "title": "Set API key",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.testConnection",
+        "title": "Test connection",
         "category": "Mavis"
       },
       {

@@ -6,6 +6,28 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] — 2026-07-26 (Diagnóstico: 'Test connection' + SSE mais robusto)
+
+### Added
+- **Comando `Mavis: Test connection`** (paleta) que bate no
+  `GET {archonUrl}{apiBase}/models` com a chave persistida e abre
+  um Output Channel com:
+  - URL completa + header de Authorization (mascarado)
+  - HTTP status + body (primeiros 600 chars)
+  - Lista de modelos anunciados (se for 200)
+  - Mensagem clara no notification de acordo com o status
+    (OK / 401 / 403 / 404 / falha de rede)
+- **SSE parsing agora captura `delta.reasoning_content`** (campo
+  usado pelo `MiniMax-M3` quando o modo thinking tá ligado). Antes
+  só olhava `delta.content`.
+- Se o servidor responde 200 mas sem nenhum chunk de conteúdo, o
+  shim agora emite um `type:"error"` claro (em vez de ficar em
+  silêncio). Tenta ler o body como fallback pra mostrar uma amostra.
+
+### Changed
+- Output do `Test connection` é amigável para copiar/colar em
+  relatórios de bug.
+
 ## [0.3.2] — 2026-07-26 (Layout: Mavis Chat no painel direito, ao lado do Copilot)
 
 ### Changed
