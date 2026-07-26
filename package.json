@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -147,32 +147,23 @@
       }
     ],
     "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "mavis-chat",
-          "title": "MiniMax Agent",
-          "icon": "resources/mavis-icon.svg"
-        }
-      ],
       "auxiliarybar": [
         {
-          "id": "mavis-drive",
-          "title": "Mavis Drive",
+          "id": "mavis-side",
+          "title": "MiniMax Agent",
           "icon": "resources/mavis-icon.svg"
         }
       ]
     },
     "views": {
-      "mavis-chat": [
+      "mavis-side": [
         {
           "id": "mavis.chatView",
           "name": "Chat",
           "type": "webview",
           "contextualTitle": "MiniMax Agent",
           "when": "true"
-        }
-      ],
-      "mavis-drive": [
+        },
         {
           "id": "mavis.driveView",
           "name": "Drive",

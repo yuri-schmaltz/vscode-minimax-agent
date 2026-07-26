@@ -419,7 +419,14 @@ export function activate(context: ExtensionContext): void {
       // For cycle 1 we don't auto-send; user still has to press Enter.
     }),
     commands.registerCommand('mavis.toggleChat', () => {
-      commands.executeCommand('workbench.view.mavis-chat');
+      // Ensure the auxiliary bar (right side, where Copilot Chat lives)
+      // is visible, then focus the Mavis chat view. The view id is the
+      // same as the container id (`mavis-side`), and we pass
+      // `mavis.chatView` as the second argument to focus the chat
+      // specifically (not the drive tab).
+      void commands.executeCommand('workbench.action.toggleAuxiliaryBar');
+      void commands.executeCommand('workbench.view.mavis-side');
+      void commands.executeCommand('workbench.action.focusAuxiliaryGroup');
     }),
     commands.registerCommand('mavis.openSettings', async () => {
       // Open the in-extension settings panel if we have a view provider;

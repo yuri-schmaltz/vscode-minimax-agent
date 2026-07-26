@@ -6,6 +6,26 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-07-26 (Layout: Mavis Chat no painel direito, ao lado do Copilot)
+
+### Changed
+- **Mavis Chat e Drive agora aparecem no painel direito** (`Auxiliary Bar`),
+  lado a lado com o Copilot Chat do VSCode. As duas views (chat + drive)
+  viram abas dentro do mesmo container `mavis-side` no painel auxiliar.
+  O usuário pode arrastá-las pra reorganizar.
+- **`mavis.toggleChat` agora aciona o painel auxiliar** e foca a aba
+  de chat, garantindo que o atalho `Cmd/Ctrl+Shift+M` sempre revele o
+  Mavis (mesmo se a barra direita estiver escondida).
+- O ícone da activity bar (esquerda) do Mavis foi removido — o ícone
+  agora vive só no painel direito.
+
+## [0.3.1] — 2026-07-26 (Hotfix: botão inline 'Definir API key' no chat)
+
+### Fixed
+- Quando o usuário manda mensagem sem a API key configurada, o chat
+  agora mostra um botão **"Definir API key"** direto no banner de erro.
+  Anteriormente o shim emitia um erro genérico que a UI engolia.
+
 ## [0.3.0] — 2026-07-26 (Out-of-the-box: vincula conta MiniMax + defaults prontos)
 
 ### Added
