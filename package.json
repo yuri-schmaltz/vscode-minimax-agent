@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -229,7 +229,10 @@
       {
         "viewType": "mavis-notebook",
         "displayName": "Mavis Notebook",
-        "filenamePattern": ["*.mavisnb", "*.mavis.ipynb"],
+        "filenamePattern": [
+          "*.mavisnb",
+          "*.mavis.ipynb"
+        ],
         "exclusive": false,
         "priority": "default"
       }
@@ -237,7 +240,9 @@
     "taskDefinitions": [
       {
         "type": "mavis",
-        "required": ["script"],
+        "required": [
+          "script"
+        ],
         "properties": {
           "script": {
             "type": "string",
@@ -253,8 +258,13 @@
     "languages": [
       {
         "id": "mavis-notebook",
-        "aliases": ["Mavis Notebook", "mavisnb"],
-        "filenamePatterns": ["*.mavisnb"]
+        "aliases": [
+          "Mavis Notebook",
+          "mavisnb"
+        ],
+        "filenamePatterns": [
+          "*.mavisnb"
+        ]
       }
     ],
     "configuration": {
