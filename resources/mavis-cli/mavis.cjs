@@ -96,10 +96,13 @@ const MOCK = process.env.MAVIS_MOCK === '1' || !process.env.MAVIS_ARCHON_URL;
 function archonUrl(path) {
   const base = (process.env.MAVIS_ARCHON_URL || '').replace(/\/+$/, '');
   const prefix = (process.env.MAVIS_API_BASE || '/v1').replace(/\/+$/, '');
-  // If the caller already provided a full path starting with '/', just
-  // append it. Otherwise prefix with MAVIS_API_BASE.
-  const p = path.startsWith('/') ? path : prefix + (path.startsWith('/') ? '' : '/') + path;
-  return base + p;
+  // Always prepend MAVIS_API_BASE (e.g. /v1) to the path so callers
+  // can pass "/chat/completions" without worrying about the prefix.
+  // If the caller already included the prefix (starts with the same
+  // string), we still re-prepend — downstream servers expect the
+  // canonical URL and duplicating the prefix would 404.
+  const p = path.startsWith('/') ? path : '/' + path;
+  return base + prefix + p;
 }
 
 async function archonFetch(path, init) {
@@ -359,6 +362,16 @@ async function cmdSessionStream() {
     return;
   }
 
+  // Surface the effective config so the user can correlate the shim's
+  // behaviour with the host's settings in the Mavis output channel.
+  logErr(
+    `session stream start sid=${sessionId} archon=${process.env.MAVIS_ARCHON_URL || '(unset)'} ` +
+      `apiBase=${process.env.MAVIS_API_BASE || '/v1'} model=${process.env.MAVIS_MODEL || 'MiniMax-M3'} ` +
+      `stream=${process.env.MAVIS_STREAM === '1' ? 'true' : 'false'} ` +
+      `mock=${MOCK ? 'true' : 'false'} ` +
+      `key=${process.env.MAVIS_API_KEY ? 'set(' + process.env.MAVIS_API_KEY.length + ')' : 'unset'}`,
+  );
+
   // Send a "ready" beacon so the consumer can wire UI before the first token.
   emit({ type: 'ready', sessionId, mock: MOCK, ts: nowTs() });
 
@@ -397,6 +410,7 @@ async function cmdSessionStream() {
       // robust, flip the env back to '1' to get the typing effect.
       const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
       const useStream = process.env.MAVIS_STREAM === '1';
+      logErr(`chat request -> ${archonUrl('/chat/completions')} model=${model} stream=${useStream}`);
       let res;
       try {
         res = await archonFetch('/chat/completions', {

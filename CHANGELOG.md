@@ -6,7 +6,56 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.11] — 2026-07-26 (FIX CRÍTICO: shim estava batendo em /chat/completions sem o /v1)
+
+### Fixed
+- **Bug crítico que silenciava todas as respostas do chat**: a função
+  `archonUrl(path)` no shim (`resources/mavis-cli/mavis.cjs`) pulava
+  `MAVIS_API_BASE` quando o `path` começava com `/`. Resultado: o shim
+  batia em `https://api.minimax.io/chat/completions` (404 silencioso
+  com retry, ou 200 vazio) em vez de
+  `https://api.minimax.io/v1/chat/completions`. O `Mavis: Test
+  connection` (host) construía a URL corretamente, então o teste
+  passava — mas o chat (shim) falhava, dando timeout de 15s.
+  Agora o shim SEMPRE prepende `MAVIS_API_BASE` (default `/v1`).
+
+### Added
+- Log de diagnóstico no `cmdSessionStream` mostrando o env efetivo
+  (`archon`, `apiBase`, `model`, `stream`, `mock`, `key length`) pra
+  correlacionar o que o shim vê com as settings do host.
+- Log da URL completa em cada request (`chat request -> https://...`).
+- 4 testes unitários pro `archonUrl` (default `/v1`, custom
+  `apiBase`, trim de trailing slashes, mock mode).
+
 ## [0.3.9] — 2026-07-26 (Diagnóstico visível: Mavis: Open Output + timeout 15s no chat)
+
+### Added
+- **Canal "Mavis" no Output do VSCode** (saída do VSCode → aba
+  "Mavis"). Mostra o stderr do shim, o lifecycle de cada stream
+  (start, done, error) e o output do `Mavis: Test connection`.
+  Antes o stderr só ia pro `process.stderr` (console do devtools,
+  invisível pro usuário).
+- **Comando `Mavis: Open Output`** (Command Palette). Abre o canal
+  diretamente, sem precisar caçar no menu do VSCode.
+- **Timeout de 15s no chat**. Se você mandar mensagem e nada
+  voltar em 15s, aparece um banner com botões **"Testar conexão"**
+  e **"Abrir Output"**. Evita ficar olhando pra tela sem entender
+  o que aconteceu.
+- **Botões "Testar conexão" e "Abrir Output"** no banner de erro
+  do chat (não só no timeout) — pra você poder diagnosticar
+  diretamente do chat sem sair dele.
+- `onStderr` callback no `MavisClient` + `onLog` dep no
+  `ChatViewProvider` permitem ao host logar o que tá rolando no
+  stream e no shim.
+- Novas mensagens webview→host: `testConnection`, `openOutput`.
+
+### Fixed
+- `onStreamEvent` do `done` estava duplicado (dois blocos
+  `if (kind === 'done')`, um ignorava o outro). Consolidado num
+  único bloco que loga E emite o `assistantMessage` com
+  `delta.done=true`.
+
+## [0.3.10] — 2026-07-26 (scripts/update-mavis.sh suprime o warning DEP0169)
 
 ### Added
 - **Canal "Mavis" no Output do VSCode** (saída do VSCode → aba
