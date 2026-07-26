@@ -121,6 +121,11 @@ export function App(): JSX.Element {
         case 'error':
           setError(msg.message);
           break;
+        case 'apiKeyMissing':
+          setError(
+            'Sua chave de API do MiniMax não está configurada. Clique em "Definir API key" abaixo para conectar sua conta.',
+          );
+          break;
         case 'history':
           setMessages(
             msg.messages.map((mm) => ({
@@ -253,7 +258,19 @@ export function App(): JSX.Element {
             <p className="mavis-empty-tip">Press Enter to send, Shift+Enter for a new line.</p>
           </div>
         )}
-        {error && <div className="mavis-error" role="alert">⚠ {error}</div>}
+        {error && (
+          <div className="mavis-error" role="alert">
+            <div className="mavis-error-body">⚠ {error}</div>
+            {/API[ _]?key|API key|MAVIS_API_KEY/i.test(error) && (
+              <button
+                className="mavis-error-action"
+                onClick={() => postToHost({ type: 'requestSetApiKey' })}
+              >
+                Definir API key
+              </button>
+            )}
+          </div>
+        )}
         {messages.map((m) => (
           <Message key={m.id} message={m} />
         ))}

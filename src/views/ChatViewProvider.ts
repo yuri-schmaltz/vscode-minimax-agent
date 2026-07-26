@@ -16,6 +16,7 @@
 import * as path from 'node:path';
 import {
   CancellationToken,
+  commands,
   EventEmitter as VSCodeEventEmitter,
   ExtensionContext,
   Uri,
@@ -35,6 +36,7 @@ export type WebviewToHost =
   | { type: 'sendPrompt'; sessionId: string; text: string }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
+  | { type: 'requestSetApiKey' }
   | { type: 'copyToClipboard'; text: string }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'closeTab'; sessionId: string }
@@ -67,6 +69,7 @@ export type HostToWebview =
   | { type: 'userMessage'; msg: { id: string; text: string; ts: number } }
   | { type: 'assistantMessage'; delta: { text: string; sessionId: string; ts: number; done?: boolean } }
   | { type: 'error'; message: string }
+  | { type: 'apiKeyMissing' }
   | { type: 'history'; messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }> }
   | { type: 'tabs'; tabs: Array<{ id: string; agent: string; title: string; active: boolean }> }
   | { type: 'attachments'; attachments: Attachment[] };
@@ -300,6 +303,13 @@ export class ChatViewProvider implements WebviewViewProvider {
       case 'sendPrompt': {
         const sessionId = msg.sessionId;
         if (!sessionId) return;
+        // Pre-flight: if no API key is set, tell the user before
+        // the shim ever tries to talk to the backend. This avoids
+        // a confusing "no response" UI when the only problem is the
+        // missing key.
+        if (!this.deps.client.getApiKey?.()) {
+          this.postToWebview({ type: 'apiKeyMissing' });
+        }
         const userMsg = { id: 'u_' + Date.now().toString(36), text: msg.text, ts: Date.now() };
         this.postToWebview({ type: 'userMessage', msg: userMsg });
         await this.ensureStream(sessionId);
@@ -313,6 +323,13 @@ export class ChatViewProvider implements WebviewViewProvider {
       }
       case 'openSettings': {
         this.deps.onOpenSettings?.();
+        return;
+      }
+      case 'requestSetApiKey': {
+        // Forward to the host extension so the input box opens in the
+        // editor (not inside the webview, which can't show password
+        // fields safely).
+        void commands.executeCommand('mavis.setApiKey');
         return;
       }
       case 'copyToClipboard': {
