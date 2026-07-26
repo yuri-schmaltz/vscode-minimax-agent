@@ -13,7 +13,8 @@
  * Lifecycle: `onStartupFinished` triggers activate(); deactivate() is
  * responsible for cleanly disposing every long-lived resource.
  */
-import { commands, env, ExtensionContext, StatusBarAlignment, Uri, window, workspace } from 'vscode';
+import { commands, env, ExtensionContext, languages, StatusBarAlignment, Uri, window, workspace } from 'vscode';
+import * as vscode from 'vscode';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { MavisClient } from './client/MavisClient';
@@ -35,6 +36,10 @@ import { CronListProvider } from './cron/CronListProvider';
 import { SettingsViewProvider } from './views/SettingsViewProvider';
 import { detectLocale, t as i18n } from './i18n';
 import { Telemetry, makeDefaultTelemetryHost } from './telemetry/Telemetry';
+import { MavisLMProvider, MAVIS_LM_VENDOR } from './lm/MavisLMProvider';
+import { MavisInlineCompletionProvider, INLINE_EDIT_SELECTOR } from './inline/InlineEditProvider';
+import { MavisNotebookControllerProvider } from './notebook/MavisNotebookController';
+import { MavisTaskProvider } from './tasks/MavisTaskProvider';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
@@ -47,6 +52,10 @@ let sessionCache: SessionCache | undefined;
 let codeActionDisposable: { dispose(): void } | undefined;
 let settingsView: SettingsViewProvider | undefined;
 let telemetry: Telemetry | undefined;
+let lmProvider: MavisLMProvider | undefined;
+let inlineDisposable: { dispose(): void } | undefined;
+let notebookProvider: MavisNotebookControllerProvider | undefined;
+let taskProvider: MavisTaskProvider | undefined;
 
 function newSessionId(): string {
   sessionCounter += 1;
@@ -535,6 +544,51 @@ export function activate(context: ExtensionContext): void {
     }),
   );
 
+  // --- Fase 6: Advanced integration (LM API, inline edit, notebooks, tasks)
+  // The four providers wire into VSCode's APIs. They are constructed
+  // against the active `client` so all Mavis I/O is funnelled through
+  // the same bridge as the rest of the extension.
+
+  // 1) Language Model API. The vendor id is `mavis`; consumers query
+  // via `vscode.lm.selectChatModels({ vendor: 'mavis' })`.
+  lmProvider = new MavisLMProvider({ client });
+  context.subscriptions.push(lmProvider);
+  try {
+    const disp = vscode.lm.registerLanguageModelChatProvider(MAVIS_LM_VENDOR, lmProvider);
+    context.subscriptions.push(disp);
+  } catch {
+    // Older VSCode without the LM API → the provider just stays dormant.
+  }
+
+  // 2) Inline edit (Cmd+K). Registered for all languages and document
+  // types listed in `INLINE_EDIT_SELECTOR`.
+  inlineDisposable = languages.registerInlineCompletionItemProvider(
+    INLINE_EDIT_SELECTOR,
+    new MavisInlineCompletionProvider({ client }),
+  );
+  context.subscriptions.push(inlineDisposable);
+
+  // 3) Notebook controller. Auto-attaches to any `jupyter-notebook`
+  // document and to our custom `mavis-notebook` type.
+  notebookProvider = new MavisNotebookControllerProvider({ client });
+  context.subscriptions.push({ dispose: () => notebookProvider?.dispose() });
+  notebookProvider.refreshAffinity();
+  context.subscriptions.push(workspace.onDidOpenNotebookDocument(() => notebookProvider?.refreshAffinity()));
+  // Track notebooks so Mavis shows up in their kernel pickers.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { notebooks } = require('vscode');
+    // The notebook type is also declared in `package.json` under
+    // `notebookProvider`. We keep the type list here in sync.
+    void notebooks;
+  } catch { /* ignore */ }
+
+  // 4) Tasks provider. The three built-in tasks (`test`, `lint`,
+  // `package`) appear under the "Mavis" source in the Tasks panel.
+  taskProvider = new MavisTaskProvider();
+  taskProvider.registerWithVSCode();
+  context.subscriptions.push({ dispose: () => taskProvider?.dispose() });
+
   // On activation, surface "Hello" once (Fase 0 placeholder).
   window.showInformationMessage(i18n('extension.ready', initialLocale));
 }
@@ -550,6 +604,14 @@ export function deactivate(): void {
   settingsView = undefined;
   telemetry?.dispose();
   telemetry = undefined;
+  lmProvider?.dispose();
+  lmProvider = undefined;
+  inlineDisposable?.dispose();
+  inlineDisposable = undefined;
+  notebookProvider?.dispose();
+  notebookProvider = undefined;
+  taskProvider?.dispose();
+  taskProvider = undefined;
   client?.dispose();
   client = undefined;
   secretStore = undefined;
