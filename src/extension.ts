@@ -66,7 +66,11 @@ function newSessionId(): string {
 export function activate(context: ExtensionContext): void {
   const config = workspace.getConfiguration('mavis');
   const cliPath = config.get<string>('cliPath', '').trim() || undefined;
-  const archonUrl = config.get<string>('archonUrl', '').trim() || undefined;
+  // The default archon URL is the public MiniMax API. The user can
+  // override it from settings if they self-host the archon-server.
+  const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
+  const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
+  const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
   const defaultAgent = config.get<string>('defaultAgent', 'mavis') || 'mavis';
   const oauthFlowRaw = config.get<string>('oauthFlow', 'auto');
 
@@ -77,16 +81,39 @@ export function activate(context: ExtensionContext): void {
   const hydrated = sessionCache.hydrate();
   const initialAgent = hydrated.agent || defaultAgent;
 
+  // Read the API key synchronously off the SecretStorage. SecretStorage
+  // is async in production, but for activation we tolerate a short
+  // synchronous read by deferring client construction; the client will
+  // pick the key up on the next spawnEnv() call. We use the key here
+  // only when it is already cached in memory.
+  const initialApiKey = (context.globalState.get<string>('mavis.cachedApiKey') || undefined);
+
   client = new MavisClient({
     cliPath,
     archonUrl,
+    apiBase,
+    model,
     defaultAgent: initialAgent,
+    apiKey: initialApiKey,
     extensionPath: context.extensionPath,
     globalStoragePath: context.globalStorageUri.fsPath,
-    mock: !archonUrl,
+    // Mock mode is opt-in: if the user explicitly forces MAVIS_MOCK=1
+    // via `mavis.cliPath` to a non-shim binary, mock is fine. Otherwise
+    // we go real and let the shim tell the user about the missing key.
+    mock: false,
   });
   // Apply hydrated state so the UI is consistent from the first paint.
   if (hydrated.sessionId) client.setActiveSession(hydrated.sessionId);
+
+  // Asynchronously hydrate the API key and rebuild the client if it
+  // was set after activation. Without this, the very first chat would
+  // race the user's first "Set API key" command.
+  void (async () => {
+    const k = await secretStoreReadApiKey(context);
+    if (k) {
+      client!.setApiKey(k);
+    }
+  })();
 
   secretStore = new SecretStore(context.secrets);
   oauth = new OAuthManager(client, secretStore, {
@@ -315,6 +342,54 @@ export function activate(context: ExtensionContext): void {
     commands.registerCommand('mavis.signOut', async () => {
       await oauth!.signOut({ archonUrl });
       window.showInformationMessage(i18n('auth.signedOut', initialLocale));
+    }),
+    commands.registerCommand('mavis.setApiKey', async () => {
+      if (!secretStore) return;
+      const existing = client?.getApiKey();
+      const input = await window.showInputBox({
+        title: 'Mavis: Set API key',
+        prompt: 'Cole aqui a sua Subscription Key do MiniMax (prefixo `sk-cp-…`). Deixe vazio para limpar.',
+        placeHolder: 'sk-cp-...',
+        password: true,
+        ignoreFocusOut: true,
+        value: existing ? '••••••••••••' : '',
+        validateInput: (v) => {
+          if (v && v.length > 0 && !v.startsWith('sk-')) {
+            return 'A chave do MiniMax geralmente começa com `sk-`. Você colou o valor correto?';
+          }
+          return undefined;
+        },
+      });
+      if (input === undefined) return; // user pressed Esc
+      const key = input.trim();
+      await secretStore.writeApiKey(key);
+      client?.setApiKey(key || undefined);
+      if (key) {
+        await context.globalState.update('mavis.cachedApiKey', key);
+        window.showInformationMessage('Mavis: chave de API salva. Você já pode conversar com o Mavis.');
+      } else {
+        await context.globalState.update('mavis.cachedApiKey', undefined);
+        window.showInformationMessage('Mavis: chave de API removida. O chat volta ao modo local (mock).');
+      }
+      statusBar?.render?.();
+    }),
+    commands.registerCommand('mavis.welcome', async () => {
+      const hasKey = !!(client?.getApiKey() || await secretStore?.readApiKey());
+      const choice = await window.showInformationMessage(
+        hasKey
+          ? 'Mavis está pronto. Use Cmd/Ctrl+Shift+M para abrir o chat, ou escolha uma ação abaixo.'
+          : 'Bem-vindo ao Mavis! Para começar, vincule sua conta MiniMax.',
+        { modal: false },
+        hasKey ? 'Abrir chat' : 'Definir API key',
+        'Abrir configurações',
+      );
+      if (choice === 'Definir API key') {
+        await commands.executeCommand('mavis.setApiKey');
+      } else if (choice === 'Abrir chat') {
+        await commands.executeCommand('mavis.toggleChat');
+      } else if (choice === 'Abrir configurações') {
+        await commands.executeCommand('workbench.action.openSettings', 'mavis');
+      }
     }),
     commands.registerCommand('mavis.newChat', () => {
       const id = newSessionId();
@@ -589,8 +664,15 @@ export function activate(context: ExtensionContext): void {
   taskProvider.registerWithVSCode();
   context.subscriptions.push({ dispose: () => taskProvider?.dispose() });
 
-  // On activation, surface "Hello" once (Fase 0 placeholder).
-  window.showInformationMessage(i18n('extension.ready', initialLocale));
+  // On activation, surface "Hello" once. If the user has never set an
+  // API key we offer the welcome action so they can link their MiniMax
+  // account without digging through the command palette.
+  if (!context.globalState.get<boolean>('mavis.welcomed')) {
+    void context.globalState.update('mavis.welcomed', true);
+    void commands.executeCommand('mavis.welcome');
+  } else {
+    window.showInformationMessage(i18n('extension.ready', initialLocale));
+  }
 }
 
 export function deactivate(): void {
@@ -633,4 +715,19 @@ function readExtensionVersion(context: ExtensionContext): string {
     /* fall through */
   }
   return '0.0.0';
+}
+
+/**
+ * Reads the persisted MiniMax API key off the SecretStorage. We do
+ * not surface the value to the UI (the webview only sees a boolean);
+ * the key is read once at activation and re-read whenever the user
+ * runs `Mavis: Set API key`. The latest value is also mirrored into
+ * `globalState[mavis.cachedApiKey]` so it is available synchronously
+ * on next activation.
+ */
+async function secretStoreReadApiKey(context: ExtensionContext): Promise<string | undefined> {
+  if (!secretStore) return undefined;
+  const k = await secretStore.readApiKey();
+  if (k) await context.globalState.update('mavis.cachedApiKey', k);
+  return k;
 }

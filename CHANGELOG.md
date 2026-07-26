@@ -6,6 +6,48 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-07-26 (Out-of-the-box: vincula conta MiniMax + defaults prontos)
+
+### Added
+- **Vinculação de conta MiniMax via API key** — novo comando
+  `Mavis: Set API key` que abre um input box protegido, valida o
+  prefixo `sk-`, e persiste a chave em `SecretStorage` (chave
+  `mavis.apiKey`). O shim agora lê a chave via env var
+  `MAVIS_API_KEY` e faz chamadas reais pra API MiniMax.
+- **Comando `Mavis: Welcome`** — ação de boas-vindas na primeira
+  ativação (e via paleta). Detecta se já tem chave; se não, oferece
+  “Definir API key”, “Abrir chat” ou “Abrir configurações”.
+- **Defaults prontos**:
+  - `mavis.archonUrl` default = `https://api.minimax.io` (público)
+  - `mavis.apiBase` default = `/v1`
+  - `mavis.model` default = `MiniMax-M3`
+- **Shim real** (`resources/mavis-cli/mavis.cjs`):
+  - `session stream` agora chama `POST {archonUrl}/v1/chat/completions`
+    com `stream: true` e decodifica o SSE do OpenAI-compat, emitindo
+    `type:"message"` por chunk.
+  - `agent list` chama `GET /v1/models` para listar o que a chave
+    enxerga, sempre incluindo o default `mavis` (modelo
+    `MiniMax-M3`).
+  - `oauth code` / `oauth token` chamam `/oauth/code` e
+    `/oauth/token` no archon-server quando configurado; cai no mock
+    se falhar.
+- **`SecretStore.readApiKey` / `writeApiKey`** — API paralela
+  `mavis.apiKey` (separada do `mavis.auth` que guarda OAuth).
+- **`MavisClient.setApiKey` / `getApiKey`** — chave pode ser
+  aplicada/limpar depois da construção, sem precisar recriar o client.
+- **MavisClient spawnEnv** repassa `MAVIS_API_KEY`, `MAVIS_MODEL`,
+  `MAVIS_API_BASE`, `MAVIS_ARCHON_URL` pros filhos.
+
+### Changed
+- Activation agora entra em modo real (não-mock) por default. A
+  shim avisa amigavelmente se a chave não tá setada.
+- Activation só mostra `i18n('extension.ready')` na primeira
+  execução; depois, o `mavis.welcome` cuida do onboarding.
+
+### Tests
+- 4 novos testes (setApiKey round-trip, spawnEnv passthrough,
+  SecretStore API key). Total: 313 testes, 100% passando.
+
 ## [0.2.0] — 2026-07-25 (Ciclo 5 — Fase 6: integração avançada)
 
 ### Added

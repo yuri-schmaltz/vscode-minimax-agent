@@ -58,3 +58,20 @@ test('SecretStore: read of a record missing access_token returns undefined', asy
   const rec = await store.read();
   assert.equal(rec, undefined);
 });
+
+test('SecretStore: writeApiKey + readApiKey round-trip', async () => {
+  const store = new SecretStore(new SecretStorage());
+  assert.equal(await store.readApiKey(), undefined);
+  await store.writeApiKey('sk-cp-abc');
+  assert.equal(await store.readApiKey(), 'sk-cp-abc');
+  await store.writeApiKey('');
+  assert.equal(await store.readApiKey(), undefined);
+});
+
+test('SecretStore: writeApiKey with empty string clears the key', async () => {
+  const store = new SecretStore(new SecretStorage());
+  await store.writeApiKey('sk-cp-xyz');
+  assert.equal(await store.readApiKey(), 'sk-cp-xyz');
+  await store.writeApiKey('');
+  assert.equal(await store.readApiKey(), undefined);
+});

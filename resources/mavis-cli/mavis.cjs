@@ -91,6 +91,41 @@ const VERSION = (() => {
 
 const MOCK = process.env.MAVIS_MOCK === '1' || !process.env.MAVIS_ARCHON_URL;
 
+// --- HTTP helper (Node 18+ has global fetch) ----------------------------
+
+function archonUrl(path) {
+  const base = (process.env.MAVIS_ARCHON_URL || '').replace(/\/+$/, '');
+  const prefix = (process.env.MAVIS_API_BASE || '/v1').replace(/\/+$/, '');
+  // If the caller already provided a full path starting with '/', just
+  // append it. Otherwise prefix with MAVIS_API_BASE.
+  const p = path.startsWith('/') ? path : prefix + (path.startsWith('/') ? '' : '/') + path;
+  return base + p;
+}
+
+async function archonFetch(path, init) {
+  const apiKey = process.env.MAVIS_API_KEY;
+  if (!apiKey) {
+    throw new Error('MAVIS_API_KEY is not set; run "Mavis: Set API key" to authenticate.');
+  }
+  const url = archonUrl(path);
+  const headers = Object.assign(
+    { 'content-type': 'application/json', authorization: 'Bearer ' + apiKey },
+    (init && init.headers) || {},
+  );
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
+  try {
+    const res = await globalThis.fetch(url, Object.assign({}, init, { headers, signal: ctrl.signal }));
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`archon ${path} -> ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function logErr(msg) {
   process.stderr.write(`[mavis] ${msg}\n`);
 }
@@ -226,24 +261,54 @@ async function main() {
 
 function cmdAgentList() {
   // Default agent is always first; mocks are deterministic-friendly.
-  const agents = [
-    {
-      id: 'mavis',
-      name: 'Mavis',
-      description: 'Default MiniMax agent (M3).',
-      model: 'MiniMax-M3',
-      isDefault: true,
-    },
-    {
-      id: 'mavis-coder',
-      name: 'Mavis Coder',
-      description: 'Specialised for code refactor and generation tasks.',
-      model: 'MiniMax-M3',
-      isDefault: false,
-    },
-  ];
-  for (const a of agents) emit(a);
-  emit({ type: 'done', count: agents.length });
+  if (MOCK) {
+    const agents = [
+      {
+        id: 'mavis',
+        name: 'Mavis',
+        description: 'Default MiniMax agent (M3).',
+        model: 'MiniMax-M3',
+        isDefault: true,
+      },
+      {
+        id: 'mavis-coder',
+        name: 'Mavis Coder',
+        description: 'Specialised for code refactor and generation tasks.',
+        model: 'MiniMax-M3',
+        isDefault: false,
+      },
+    ];
+    for (const a of agents) emit(a);
+    emit({ type: 'done', count: agents.length });
+    return;
+  }
+  // Real path: list the models the user's API key can see. We surface
+  // MiniMax-M3 (the flagship) plus a couple of well-known siblings when
+  // they are advertised by `/models`. We do NOT block on this endpoint;
+  // if it fails we just emit the default agent so the UI stays alive.
+  (async () => {
+    let advertised = [];
+    try {
+      const res = await archonFetch('/models', { method: 'GET' });
+      const json = await res.json();
+      if (json && Array.isArray(json.data)) {
+        advertised = json.data.map((m) => m && m.id).filter((id) => typeof id === 'string');
+      }
+    } catch {
+      // /models is best-effort.
+    }
+    const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
+    const agents = [
+      { id: 'mavis', name: 'Mavis', description: 'Default MiniMax agent (M3).', model, isDefault: true },
+    ];
+    for (const a of agents) emit(a);
+    for (const id of advertised) {
+      if (id === model) continue;
+      agents.push({ id, name: id, description: `MiniMax model ${id}`, model: id, isDefault: false });
+      emit({ id, name: id, description: `MiniMax model ${id}`, model: id, isDefault: false });
+    }
+    emit({ type: 'done', count: agents.length });
+  })();
 }
 
 function cmdSessionList() {
@@ -312,17 +377,78 @@ async function cmdSessionStream() {
     if (prompt.type && prompt.type !== 'prompt') continue;
     const text = String(prompt.text || '');
 
-    // Simulate a streaming response: emit one chunk then a "done" per prompt.
-    const reply = `ok (mock: ${text.slice(0, 60)})`;
-    emit({
-      type: 'message',
-      role: 'assistant',
-      content: reply,
-      sessionId,
-      ts: nowTs(),
-    });
-    await sleep(rand(50, 200));
-    emit({ type: 'message', role: 'assistant', content: ' ✔', sessionId, ts: nowTs() });
+    if (MOCK) {
+      // Simulate a streaming response: emit one chunk then a "done" per prompt.
+      const reply = `ok (mock: ${text.slice(0, 60)})`;
+      emit({
+        type: 'message',
+        role: 'assistant',
+        content: reply,
+        sessionId,
+        ts: nowTs(),
+      });
+      await sleep(rand(50, 200));
+      emit({ type: 'message', role: 'assistant', content: ' ✔', sessionId, ts: nowTs() });
+    } else {
+      // Real path: OpenAI-compatible /chat/completions with stream=true.
+      const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
+      let res;
+      try {
+        res = await archonFetch('/chat/completions', {
+          method: 'POST',
+          body: JSON.stringify({
+            model,
+            stream: true,
+            messages: [{ role: 'user', content: text }],
+          }),
+        });
+      } catch (err) {
+        emit({ type: 'error', message: (err && err.message) || String(err), sessionId, ts: nowTs() });
+        continue;
+      }
+      if (!res.body) {
+        emit({ type: 'error', message: 'archon /chat/completions returned no body', sessionId, ts: nowTs() });
+        continue;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf8');
+      let buffer = '';
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf('\n')) !== -1) {
+            const rawLine = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!rawLine) continue;
+            // SSE format: lines starting with "data:" carry the JSON.
+            // Stop sentinel: "data: [DONE]".
+            if (!rawLine.startsWith('data:')) continue;
+            const payload = rawLine.slice(5).trim();
+            if (payload === '[DONE]') {
+              buffer = '';
+              break;
+            }
+            try {
+              const json = JSON.parse(payload);
+              const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
+              const delta = choice && choice.delta ? choice.delta : {};
+              const content = typeof delta.content === 'string' ? delta.content : '';
+              if (content) {
+                emit({ type: 'message', role: 'assistant', content, sessionId, ts: nowTs() });
+              }
+            } catch {
+              // Ignore malformed SSE chunks; upstream may inject comments.
+            }
+          }
+        }
+      } finally {
+        try { reader.releaseLock(); } catch { /* ignore */ }
+      }
+    }
   }
 
   emit({ type: 'done', sessionId });
@@ -407,35 +533,85 @@ function basename(p) {
   return m[m.length - 1] || p;
 }
 
-function cmdOauthCode() {
-  const device_code = randomId('dev');
-  const user_code = `${rand(100, 999)}-${rand(1000, 9999)}`;
-  emit({
-    type: 'oauth-code',
-    user_code,
-    verification_uri: 'https://example.invalid/mavis/activate',
-    device_code,
-    interval: 5,
-    expires_in: 600,
-  });
-  emit({ type: 'done' });
+async function cmdOauthCode() {
+  if (MOCK) {
+    const device_code = randomId('dev');
+    const user_code = `${rand(100, 999)}-${rand(1000, 9999)}`;
+    emit({
+      type: 'oauth-code',
+      user_code,
+      verification_uri: 'https://example.invalid/mavis/activate',
+      device_code,
+      interval: 5,
+      expires_in: 600,
+    });
+    emit({ type: 'done' });
+    return;
+  }
+  // Real path: try the archon-server's device-code endpoint. If it
+  // does not exist, we fall back to API-key auth (the user is already
+  // running `Mavis: Set API key`).
+  try {
+    const res = await archonFetch('/oauth/code', { method: 'POST', body: JSON.stringify({ client_id: 'minimax-vscode-agent' }) });
+    const json = await res.json();
+    if (!json || typeof json.device_code !== 'string' || typeof json.user_code !== 'string') {
+      throw new Error('archon /oauth/code returned an unexpected shape');
+    }
+    emit({
+      type: 'oauth-code',
+      user_code: json.user_code,
+      verification_uri: json.verification_uri || 'https://platform.minimax.io/user-center/payment/token-plan',
+      device_code: json.device_code,
+      interval: json.interval || 5,
+      expires_in: json.expires_in || 600,
+    });
+  } catch (err) {
+    emit({ type: 'error', message: (err && err.message) || String(err) });
+  } finally {
+    emit({ type: 'done' });
+  }
 }
 
-function cmdOauthToken() {
+async function cmdOauthToken() {
   const deviceCode = arg('--device-code');
   if (!deviceCode) {
     logErr('--device-code required');
     process.exit(2);
   }
-  emit({
-    type: 'oauth-token',
-    access_token: 'mock_access_' + Math.random().toString(36).slice(2),
-    refresh_token: 'mock_refresh_' + Math.random().toString(36).slice(2),
-    expires_in: 3600,
-    token_type: 'Bearer',
-    scope: 'group_id profile model.completion',
-  });
-  emit({ type: 'done' });
+  if (MOCK) {
+    emit({
+      type: 'oauth-token',
+      access_token: 'mock_access_' + Math.random().toString(36).slice(2),
+      refresh_token: 'mock_refresh_' + Math.random().toString(36).slice(2),
+      expires_in: 3600,
+      token_type: 'Bearer',
+      scope: 'group_id profile model.completion',
+    });
+    emit({ type: 'done' });
+    return;
+  }
+  try {
+    const res = await archonFetch('/oauth/token', {
+      method: 'POST',
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', client_id: 'minimax-vscode-agent', device_code: deviceCode }),
+    });
+    const json = await res.json();
+    if (!json || typeof json.access_token !== 'string') {
+      throw new Error('archon /oauth/token returned an unexpected shape');
+    }
+    emit({
+      type: 'oauth-token',
+      access_token: json.access_token,
+      refresh_token: json.refresh_token || '',
+      expires_in: json.expires_in || 3600,
+      token_type: json.token_type || 'Bearer',
+      scope: json.scope || 'group_id profile model.completion',
+    });
+  } catch (err) {
+    emit({ type: 'error', message: (err && err.message) || String(err) });
+  } finally {
+    emit({ type: 'done' });
+  }
 }
 
 // --- Drive (Fase 4) --------------------------------------------------------

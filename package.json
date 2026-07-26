@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -52,6 +52,16 @@
       {
         "command": "mavis.signIn",
         "title": "Sign in",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.setApiKey",
+        "title": "Set API key",
+        "category": "Mavis"
+      },
+      {
+        "command": "mavis.welcome",
+        "title": "Welcome",
         "category": "Mavis"
       },
       {
@@ -288,8 +298,8 @@
         },
         "mavis.model": {
           "type": "string",
-          "default": "",
-          "markdownDescription": "Override the model used for completions. Empty means 'use server default'."
+          "default": "MiniMax-M3",
+          "markdownDescription": "Model used for completions. Default: `MiniMax-M3` (MiniMax's flagship M3 model)."
         },
         "mavis.telemetry": {
           "type": "string",
@@ -318,8 +328,13 @@
         },
         "mavis.archonUrl": {
           "type": "string",
-          "default": "",
-          "markdownDescription": "Override the archon-server base URL. Empty means use the default."
+          "default": "https://api.minimax.io",
+          "markdownDescription": "Base URL for the Mavis (MiniMax) backend. **Default: `https://api.minimax.io`** — the public MiniMax API. Override only if you self-host the archon-server."
+        },
+        "mavis.apiBase": {
+          "type": "string",
+          "default": "/v1",
+          "markdownDescription": "Path prefix appended to `mavis.archonUrl` for chat/completions calls. Default: `/v1` (OpenAI-compatible)."
         }
       }
     }

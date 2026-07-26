@@ -400,3 +400,34 @@ test('createCodeActionTask.cancel() is idempotent', async () => {
   });
   c.dispose();
 });
+
+test('setApiKey + getApiKey round-trip', () => {
+  const c = new MavisClient({ spawnImpl: makeSpawner(makeFakeChild()), resolveBundledPath: () => '/bin/mavis' });
+  assert.equal(c.getApiKey(), undefined);
+  c.setApiKey('sk-cp-test');
+  assert.equal(c.getApiKey(), 'sk-cp-test');
+  c.setApiKey('');
+  assert.equal(c.getApiKey(), undefined);
+  c.dispose();
+});
+
+test('spawnEnv passes MAVIS_API_KEY + MAVIS_MODEL + MAVIS_API_BASE to the child', () => {
+  let captured: NodeJS.ProcessEnv | undefined;
+  const c = new MavisClient({
+    spawnImpl: ((_bin: string, _args: string[], opts: unknown) => {
+      captured = (opts as { env: NodeJS.ProcessEnv }).env;
+      return makeFakeChild();
+    }) as never,
+    archonUrl: 'https://api.minimax.io',
+    apiBase: '/v1',
+    model: 'MiniMax-M3',
+    apiKey: 'sk-cp-test',
+    resolveBundledPath: () => '/bin/mavis',
+  });
+  c.listSessions().catch(() => undefined);
+  assert.equal(captured?.MAVIS_API_KEY, 'sk-cp-test');
+  assert.equal(captured?.MAVIS_MODEL, 'MiniMax-M3');
+  assert.equal(captured?.MAVIS_API_BASE, '/v1');
+  assert.equal(captured?.MAVIS_ARCHON_URL, 'https://api.minimax.io');
+  c.dispose();
+});

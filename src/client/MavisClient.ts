@@ -66,8 +66,14 @@ export interface MavisClientOptions {
   cliPath?: string;
   /** archon-server base URL. Empty means use the shim/mock. */
   archonUrl?: string;
+  /** API base path prefix (e.g. `/v1`). Defaults to `/v1`. */
+  apiBase?: string;
   /** Default agent to use when none is specified. */
   defaultAgent?: string;
+  /** Model used for completions. Defaults to `MiniMax-M3`. */
+  model?: string;
+  /** MiniMax / archon-server API key. Passed through as MAVIS_API_KEY. */
+  apiKey?: string;
   /** Force mock mode (sets MAVIS_MOCK=1 in env). Defaults to true when archonUrl is empty. */
   mock?: boolean;
   /** Override child_process.spawn (for tests). */
@@ -88,12 +94,15 @@ interface RunningStream {
 }
 
 export class MavisClient {
-  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent'>> & {
+  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model'>> & {
     cliPath: string | undefined;
     archonUrl: string | undefined;
     defaultAgent: string | undefined;
     extensionPath: string | undefined;
     globalStoragePath: string | undefined;
+    apiKey: string | undefined;
+    apiBase: string;
+    model: string;
   };
   private readonly spawnImpl: typeof spawn;
   private readonly streams = new Set<RunningStream>();
@@ -122,7 +131,10 @@ export class MavisClient {
     this.options = {
       cliPath: opts.cliPath,
       archonUrl: opts.archonUrl,
+      apiBase: opts.apiBase ?? '/v1',
       defaultAgent: opts.defaultAgent,
+      model: opts.model ?? 'MiniMax-M3',
+      apiKey: opts.apiKey,
       mock: opts.mock ?? !opts.archonUrl,
       spawnImpl: opts.spawnImpl ?? spawn,
       resolveBundledPath:
@@ -175,6 +187,21 @@ export class MavisClient {
     this.activeSession = sessionId;
     this.onContextChanged.emit('session', sessionId);
     this.onSessionSwitched.emit('session', sessionId as string);
+  }
+
+  /**
+   * Sets (or clears) the MiniMax / archon-server API key. Subsequent
+   * child processes spawned by this client will receive the key as
+   * `MAVIS_API_KEY` in their environment. Idempotent: passing the
+   * same key is a no-op.
+   */
+  setApiKey(key: string | undefined): void {
+    this.options.apiKey = key || undefined;
+  }
+
+  /** Currently configured API key, or `undefined`. */
+  getApiKey(): string | undefined {
+    return this.options.apiKey;
   }
 
   /**
@@ -757,6 +784,11 @@ export class MavisClient {
     }
     if (this.options.archonUrl) {
       env.MAVIS_ARCHON_URL = this.options.archonUrl;
+    }
+    env.MAVIS_API_BASE = this.options.apiBase;
+    env.MAVIS_MODEL = this.options.model;
+    if (this.options.apiKey) {
+      env.MAVIS_API_KEY = this.options.apiKey;
     }
     return {
       env,
