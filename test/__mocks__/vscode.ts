@@ -170,6 +170,7 @@ export class WorkspaceEdit {
 
 export const languages = {
   registerCodeActionsProvider: () => ({ dispose: () => undefined }),
+  registerInlineCompletionItemProvider: (_selector: unknown, _provider: unknown) => ({ dispose: () => undefined }),
 };
 
 export const window = {
@@ -460,3 +461,210 @@ export class CancellationTokenSource {
     /* noop */
   }
 }
+
+// ---------------------------------------------------------------- Fase 6 mocks
+// Minimal mocks for the Language Model, Notebook, Tasks, and Inline
+// Completion APIs. The real classes from `@types/vscode` are rich; we
+// only need just enough surface for the production code to call into.
+
+export class InlineCompletionItem {
+  insertText: string;
+  range?: unknown;
+  command?: unknown;
+  constructor(insertText: string, range?: unknown, command?: unknown) {
+    this.insertText = insertText;
+    this.range = range;
+    this.command = command;
+  }
+}
+
+export class InlineCompletionList {
+  items: InlineCompletionItem[];
+  constructor(items: InlineCompletionItem[]) { this.items = items; }
+}
+
+export class LanguageModelTextPart {
+  value: string;
+  constructor(value: string) { this.value = value; }
+}
+
+export class LanguageModelToolCallPart {
+  callId: string;
+  name: string;
+  input: unknown;
+  constructor(callId: string, name: string, input: unknown) {
+    this.callId = callId;
+    this.name = name;
+    this.input = input;
+  }
+}
+
+export class LanguageModelToolResultPart {
+  callId: string;
+  content: unknown[];
+  constructor(callId: string, content: unknown[]) {
+    this.callId = callId;
+    this.content = content;
+  }
+}
+
+export class LanguageModelDataPart {
+  data: unknown;
+  mimeType: string;
+  constructor(data: unknown, mimeType: string) {
+    this.data = data;
+    this.mimeType = mimeType;
+  }
+}
+
+export class LanguageModelChatMessage {
+  role: string;
+  content: unknown[];
+  constructor(role: string, content: unknown[] | string) {
+    this.role = role;
+    this.content = Array.isArray(content) ? content : [new LanguageModelTextPart(content as string)];
+  }
+  static User(content: string | unknown[]): LanguageModelChatMessage {
+    return new LanguageModelChatMessage('user', content);
+  }
+  static Assistant(content: string | unknown[]): LanguageModelChatMessage {
+    return new LanguageModelChatMessage('assistant', content);
+  }
+}
+
+export const lm = {
+  registerLanguageModelChatProvider: (_vendor: string, _provider: unknown) => ({ dispose: () => undefined }),
+  selectChatModels: async (_selector?: unknown) => [] as unknown[],
+};
+
+export const NotebookCellOutputItem = class NotebookCellOutputItem {
+  static StdOut = 1;
+  static StdErr = 2;
+  mimeType: string;
+  value: unknown;
+  constructor(mimeOrErr: number | string | Error, value?: unknown) {
+    if (mimeOrErr instanceof Error) {
+      this.mimeType = 'application/x-notebook-error';
+      this.value = mimeOrErr.message;
+    } else if (typeof mimeOrErr === 'number') {
+      this.mimeType = mimeOrErr === NotebookCellOutputItem.StdErr ? 'application/x-notebook-stderr' : 'application/x-notebook-stdout';
+      this.value = value;
+    } else {
+      this.mimeType = mimeOrErr;
+      this.value = value;
+    }
+  }
+  static error(err: Error | string): NotebookCellOutputItem {
+    return new NotebookCellOutputItem(err);
+  }
+};
+
+export class NotebookCellOutput {
+  items: unknown[];
+  constructor(items: unknown[]) { this.items = items; }
+}
+
+export class NotebookCellExecution {
+  token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
+  start(_d: number) { /* noop */ }
+  end(_ok: boolean, _d: number) { /* noop */ }
+  appendOutput(_o: unknown) { /* noop */ }
+  replaceOutput(_o: unknown) { /* noop */ }
+}
+
+export class NotebookController {
+  id: string;
+  notebookType: string;
+  label: string;
+  supportedLanguages: string[] = [];
+  executeHandler?: unknown;
+  constructor(id: string, notebookType: string, label: string) {
+    this.id = id;
+    this.notebookType = notebookType;
+    this.label = label;
+  }
+  createNotebookCellExecution(_cell: unknown): NotebookCellExecution { return new NotebookCellExecution(); }
+  updateNotebookAffinity(_nb: unknown, _affinity: number) { /* noop */ }
+  dispose() { /* noop */ }
+}
+
+export const notebooks = {
+  createNotebookController: (id: string, notebookType: string, label: string) => new NotebookController(id, notebookType, label),
+  notebookDocuments: [] as unknown[],
+};
+
+export enum TaskScope {
+  Global = 1,
+  Workspace = 2,
+}
+
+export class TaskGroup {
+  static Test = new TaskGroup('test', 'Test');
+  static Build = new TaskGroup('build', 'Build');
+  static Clean = new TaskGroup('clean', 'Clean');
+  static Rebuild = new TaskGroup('rebuild', 'Rebuild');
+  static None = new TaskGroup('none', 'None');
+  private constructor(public kind: string, public label: string) {}
+  isDefault?: boolean;
+}
+
+export class ShellExecution {
+  command: string;
+  args?: string[];
+  options?: { cwd?: string };
+  constructor(command: string, argsOrOpts?: string | { cwd?: string } | string[], options?: { cwd?: string }) {
+    this.command = command;
+    if (typeof argsOrOpts === 'string') {
+      this.options = options;
+    } else if (Array.isArray(argsOrOpts)) {
+      this.args = argsOrOpts;
+      this.options = options;
+    } else {
+      this.options = argsOrOpts;
+    }
+  }
+}
+
+export class Task {
+  definition: { type: string; [k: string]: unknown };
+  scope?: unknown;
+  name: string;
+  source: string;
+  execution?: ShellExecution;
+  isBackground = false;
+  detail?: string;
+  group?: TaskGroup;
+  presentationOptions: Record<string, unknown> = {};
+  problemMatchers: string[] = [];
+  runOptions: Record<string, unknown> = {};
+  constructor(
+    definition: { type: string; [k: string]: unknown },
+    scopeOrName: unknown,
+    nameOrSource: string,
+    sourceOrExec?: string | ShellExecution,
+    execOrMatchers?: ShellExecution | string[] | undefined,
+    matchers?: string[] | undefined,
+  ) {
+    this.definition = definition;
+    if (typeof scopeOrName === 'string') {
+      this.name = scopeOrName;
+      this.source = nameOrSource;
+      this.execution = sourceOrExec as ShellExecution;
+      this.problemMatchers = (execOrMatchers as string[] | undefined) ?? [];
+    } else {
+      this.scope = scopeOrName;
+      this.name = nameOrSource;
+      this.source = sourceOrExec as string;
+      this.execution = execOrMatchers as ShellExecution;
+      this.problemMatchers = matchers ?? [];
+    }
+  }
+}
+
+export const tasks = {
+  registerTaskProvider: (_type: string, _provider: unknown) => ({ dispose: () => undefined }),
+};
+
+// Workspace extension for notebooks
+(workspaceMutable as unknown as { onDidOpenNotebookDocument: (l: (e: unknown) => void) => { dispose(): void } }).onDidOpenNotebookDocument = (_l: (e: unknown) => void) => ({ dispose: () => undefined });
+(workspaceMutable as unknown as { notebookDocuments: unknown[] }).notebookDocuments = [];
