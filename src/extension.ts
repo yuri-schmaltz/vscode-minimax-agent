@@ -52,6 +52,7 @@ let sessionCache: SessionCache | undefined;
 let codeActionDisposable: { dispose(): void } | undefined;
 let settingsView: SettingsViewProvider | undefined;
 let telemetry: Telemetry | undefined;
+let mavisOutput: import('vscode').OutputChannel | undefined;
 let lmProvider: MavisLMProvider | undefined;
 let inlineDisposable: { dispose(): void } | undefined;
 let notebookProvider: MavisNotebookControllerProvider | undefined;
@@ -99,6 +100,14 @@ export function activate(context: ExtensionContext): void {
     apiKey: initialApiKey,
     extensionPath: context.extensionPath,
     globalStoragePath: context.globalStorageUri.fsPath,
+    onStderr: (text) => {
+      // Stream shim stderr into the shared Mavis output channel.
+      // Each line is prefixed with [mavis:cli] for easy filtering.
+      if (!mavisOutput) return;
+      for (const line of text.split(/\r?\n/)) {
+        if (line.length > 0) mavisOutput.appendLine(`[mavis:cli] ${line}`);
+      }
+    },
     // Mock mode is opt-in: if the user explicitly forces MAVIS_MOCK=1
     // via `mavis.cliPath` to a non-shim binary, mock is fine. Otherwise
     // we go real and let the shim tell the user about the missing key.
@@ -175,6 +184,7 @@ export function activate(context: ExtensionContext): void {
     defaultAgent: initialAgent,
     newSessionId,
     onOpenSettings: () => commands.executeCommand('workbench.action.openSettings', 'mavis'),
+    onLog: (line) => mavisOutput?.appendLine(`[mavis:chat] ${line}`),
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
     onNewSession: (id: string, agent: string) => {
@@ -266,6 +276,12 @@ export function activate(context: ExtensionContext): void {
   });
 
   // --- Telemetry (Fase 5, Bloco A) --------------------------------------
+  // Single output channel for diagnostics (test connection, stream
+  // lifecycle, shim stderr). Surfaced via the 'Mavis: Open Output'
+  // command and from the test connection command.
+  mavisOutput = window.createOutputChannel('Mavis');
+  context.subscriptions.push(mavisOutput);
+
   // We initialise the singleton only after the user has had a chance to
   // see the chat; the singleton itself decides whether to show the
   // opt-in notice. Network errors are best-effort.
@@ -413,7 +429,7 @@ export function activate(context: ExtensionContext): void {
       const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
       const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
       const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
-      const output = window.createOutputChannel('Mavis');
+      const output = mavisOutput ?? window.createOutputChannel('Mavis');
       output.clear();
       output.appendLine(`[mavis] === Diagnóstico de conexão Mavis ===`);
       output.appendLine(`[mavis] archonUrl: ${archonUrl}`);
@@ -511,6 +527,11 @@ export function activate(context: ExtensionContext): void {
       output.appendLine('');
       output.appendLine(`[mavis] === Fim ===`);
       output.show(true);
+    }),
+    commands.registerCommand('mavis.openOutput', () => {
+      // Surface the shared output channel so the user can see the shim
+      // stderr + the test-connection diagnostic without hunting for it.
+      mavisOutput?.show(true);
     }),
     commands.registerCommand('mavis.welcome', async () => {
       const hasKey = !!(client?.getApiKey() || await secretStore?.readApiKey());

@@ -76,6 +76,8 @@ export interface MavisClientOptions {
   stream?: boolean;
   /** MiniMax / archon-server API key. Passed through as MAVIS_API_KEY. */
   apiKey?: string;
+  /** Optional callback to receive redacted shim stderr (for Output Channel). */
+  onStderr?: (text: string) => void;
   /** Force mock mode (sets MAVIS_MOCK=1 in env). Defaults to true when archonUrl is empty. */
   mock?: boolean;
   /** Override child_process.spawn (for tests). */
@@ -96,7 +98,7 @@ interface RunningStream {
 }
 
 export class MavisClient {
-  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream'>> & {
+  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream' | 'onStderr'>> & {
     cliPath: string | undefined;
     archonUrl: string | undefined;
     defaultAgent: string | undefined;
@@ -106,6 +108,7 @@ export class MavisClient {
     apiBase: string;
     model: string;
     stream: boolean;
+    onStderr?: (text: string) => void;
   };
   private readonly spawnImpl: typeof spawn;
   private readonly streams = new Set<RunningStream>();
@@ -253,7 +256,11 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        // Forward to the host's Output Channel if it set one. The
+        // channel is a no-op when the host hasn't wired it up.
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -306,7 +313,9 @@ export class MavisClient {
     });
 
     child.stderr!.on('data', (chunk: Buffer) => {
-      process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+      const text = redactString(chunk.toString('utf8'));
+      process.stderr.write(`[mavis:cli] ${text}`);
+      if (this.options.onStderr) this.options.onStderr(text);
     });
 
     child.on('error', (err) => {
@@ -398,7 +407,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -465,7 +476,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => {
         if (done) return;
@@ -550,7 +563,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -586,7 +601,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -652,7 +669,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -685,7 +704,9 @@ export class MavisClient {
         if (row && row.type === 'deleted' && row.id === id) deleted = true;
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -733,7 +754,9 @@ export class MavisClient {
         }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {
@@ -825,7 +848,9 @@ export class MavisClient {
       parser.on('end', () => resolve(out));
       parser.on('error', (err) => reject(err));
       child.stderr!.on('data', (chunk: Buffer) => {
-        process.stderr.write(`[mavis:cli] ${redactString(chunk.toString('utf8'))}`);
+        const text = redactString(chunk.toString('utf8'));
+        process.stderr.write(`[mavis:cli] ${text}`);
+        if (this.options.onStderr) this.options.onStderr(text);
       });
       child.on('error', (err) => reject(err));
       child.on('close', (code) => {

@@ -6,6 +6,34 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.9] — 2026-07-26 (Diagnóstico visível: Mavis: Open Output + timeout 15s no chat)
+
+### Added
+- **Canal "Mavis" no Output do VSCode** (saída do VSCode → aba
+  "Mavis"). Mostra o stderr do shim, o lifecycle de cada stream
+  (start, done, error) e o output do `Mavis: Test connection`.
+  Antes o stderr só ia pro `process.stderr` (console do devtools,
+  invisível pro usuário).
+- **Comando `Mavis: Open Output`** (Command Palette). Abre o canal
+  diretamente, sem precisar caçar no menu do VSCode.
+- **Timeout de 15s no chat**. Se você mandar mensagem e nada
+  voltar em 15s, aparece um banner com botões **"Testar conexão"**
+  e **"Abrir Output"**. Evita ficar olhando pra tela sem entender
+  o que aconteceu.
+- **Botões "Testar conexão" e "Abrir Output"** no banner de erro
+  do chat (não só no timeout) — pra você poder diagnosticar
+  diretamente do chat sem sair dele.
+- `onStderr` callback no `MavisClient` + `onLog` dep no
+  `ChatViewProvider` permitem ao host logar o que tá rolando no
+  stream e no shim.
+- Novas mensagens webview→host: `testConnection`, `openOutput`.
+
+### Fixed
+- `onStreamEvent` do `done` estava duplicado (dois blocos
+  `if (kind === 'done')`, um ignorava o outro). Consolidado num
+  único bloco que loga E emite o `assistantMessage` com
+  `delta.done=true`.
+
 ## [0.3.8] — 2026-07-26 (Chat abre pronto: sessão + foco automáticos)
 
 ### Changed

@@ -37,6 +37,8 @@ export type WebviewToHost =
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'requestSetApiKey' }
+  | { type: 'testConnection' }
+  | { type: 'openOutput' }
   | { type: 'copyToClipboard'; text: string }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'closeTab'; sessionId: string }
@@ -79,6 +81,8 @@ export interface ChatViewDeps {
   client: MavisClient;
   /** Called when the webview wants to open VSCode settings. */
   onOpenSettings?: () => void;
+  /** Optional log sink for stream lifecycle (used for the Mavis output channel). */
+  onLog?: (line: string) => void;
   /** Generates a new session id (caller decides strategy). */
   newSessionId: () => string;
   /** Default agent for new sessions. */
@@ -350,6 +354,19 @@ export class ChatViewProvider implements WebviewViewProvider {
         void commands.executeCommand('mavis.setApiKey');
         return;
       }
+      case 'testConnection': {
+        // Defer to the host's diagnostic command. The webview doesn't
+        // need the result — the test-connection handler already writes
+        // its output to the Mavis output channel.
+        void commands.executeCommand('mavis.testConnection');
+        return;
+      }
+      case 'openOutput': {
+        // Surface the Mavis output channel so the user can see the
+        // shim stderr + diagnostic trail.
+        void commands.executeCommand('mavis.openOutput');
+        return;
+      }
       case 'copyToClipboard': {
         // Defer to vscode.env; host should listen to onMessageFromWebview.
         return;
@@ -393,6 +410,7 @@ export class ChatViewProvider implements WebviewViewProvider {
       this.currentHandle = undefined;
     }
     this.deps.client.setActiveSession(sessionId);
+    this.deps.onLog?.(`[stream] start sessionId=${sessionId}`);
     this.currentHandle = this.deps.client.streamSession(sessionId, {
       message: (e) => this.onStreamEvent('message', e),
       tool_call: (e) => this.onStreamEvent('tool_call', e),
@@ -406,7 +424,21 @@ export class ChatViewProvider implements WebviewViewProvider {
   private onStreamEvent(kind: 'message' | 'tool_call' | 'tool_result' | 'error' | 'done', e: StreamEvent): void {
     if (kind === 'error') {
       const evt = e as { type: 'error'; message: string; sessionId?: string };
+      this.deps.onLog?.(`[stream] error sessionId=${evt.sessionId ?? '?'} ${evt.message}`);
       this.postError(evt.message);
+      return;
+    }
+    if (kind === 'done') {
+      this.deps.onLog?.(`[stream] done`);
+      this.postToWebview({
+        type: 'assistantMessage',
+        delta: {
+          text: '',
+          sessionId: this.currentSession?.id ?? '',
+          ts: Date.now(),
+          done: true,
+        },
+      });
       return;
     }
     if (kind === 'message') {
@@ -421,17 +453,6 @@ export class ChatViewProvider implements WebviewViewProvider {
         },
       });
       return;
-    }
-    if (kind === 'done') {
-      this.postToWebview({
-        type: 'assistantMessage',
-        delta: {
-          text: '',
-          sessionId: this.currentSession?.id ?? '',
-          ts: Date.now(),
-          done: true,
-        },
-      });
     }
   }
 

@@ -75,6 +75,7 @@ export function App(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(false);
   const [tabs, setTabs] = useState<Array<{ id: string; agent: string; title: string; active: boolean }>>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -95,8 +96,15 @@ export function App(): JSX.Element {
             ...m,
             { id: msg.msg.id, role: 'user', text: msg.msg.text, ts: msg.msg.ts },
           ]);
+          // Mark the chat as waiting for a response so the user sees
+          // a spinner / pending indicator. The pending flag is cleared
+          // by the next assistantMessage, by an error, or by the
+          // 15-second timeout below.
+          setPending(true);
+          setError(null);
           break;
         case 'assistantMessage':
+          setPending(false);
           setMessages((m) => {
             if (msg.delta.done) return m; // last chunk already appended
             const text = msg.delta.text;
@@ -119,6 +127,7 @@ export function App(): JSX.Element {
           });
           break;
         case 'error':
+          setPending(false);
           setError(msg.message);
           break;
         case 'apiKeyMissing':
@@ -155,6 +164,20 @@ export function App(): JSX.Element {
     postToHost({ type: 'ready' });
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // 15-second timeout: if pending is still on after 15s, surface a
+  // banner with a Test Connection button so the user can diagnose
+  // without having to dig through the Mavis output channel.
+  useEffect(() => {
+    if (!pending) return;
+    const handle = window.setTimeout(() => {
+      setPending(false);
+      setError(
+        'O Mavis demorou demais pra responder. Rode "Mavis: Test connection" no Command Palette para diagnosticar a rede, ou abra "Mavis: Open Output" para ver o stderr do shim.',
+      );
+    }, 15000);
+    return () => window.clearTimeout(handle);
+  }, [pending]);
 
   // Auto-scroll to bottom on new messages.
   useEffect(() => {
@@ -278,6 +301,22 @@ export function App(): JSX.Element {
               >
                 Definir API key
               </button>
+            )}
+            {(pending === false) && (/demorou|timeout|Test connection|Testar conexão|Teste a conexão|conexão|connection/i.test(error) || /demorou/i.test(error)) && (
+              <>
+                <button
+                  className="mavis-error-action"
+                  onClick={() => postToHost({ type: 'testConnection' })}
+                >
+                  Testar conexão
+                </button>
+                <button
+                  className="mavis-error-action"
+                  onClick={() => postToHost({ type: 'openOutput' })}
+                >
+                  Abrir Output
+                </button>
+              </>
             )}
           </div>
         )}
