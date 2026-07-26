@@ -225,6 +225,38 @@
         "when": "editorTextFocus || workbench.focus.activeContainerHasMavisProvider"
       }
     ],
+    "notebookProvider": [
+      {
+        "viewType": "mavis-notebook",
+        "displayName": "Mavis Notebook",
+        "filenamePattern": ["*.mavisnb", "*.mavis.ipynb"],
+        "exclusive": false,
+        "priority": "default"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "mavis",
+        "required": ["script"],
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "npm script to run (e.g. test, lint, package)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional override for the displayed task label."
+          }
+        }
+      }
+    ],
+    "languages": [
+      {
+        "id": "mavis-notebook",
+        "aliases": ["Mavis Notebook", "mavisnb"],
+        "filenamePatterns": ["*.mavisnb"]
+      }
+    ],
     "configuration": {
       "title": "MiniMax Agent",
       "type": "object",
