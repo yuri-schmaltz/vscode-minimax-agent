@@ -6,6 +6,18 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] — 2026-07-26 (Chat agora responde: non-streaming por default)
+
+### Fixed
+- **Chat não respondia mesmo com `sk-cp-…` válida.** O bug era no
+  parser SSE — o MiniMax M3 emite `delta.reasoning_content` E
+  `delta.content` em chunks pequenos, e a parse quebrava silenciosamente.
+  Mudança: o shim agora usa `stream: false` por default. A resposta
+  chega inteira após alguns segundos (em vez de streaming palavra
+  por palavra), mas funciona.
+- Novo setting **`mavis.stream`** (default `false`). Liga pra
+  reativar o typing effect; o parser SSE está em hardening.
+
 ## [0.3.3] — 2026-07-26 (Diagnóstico: 'Test connection' + SSE mais robusto)
 
 ### Added

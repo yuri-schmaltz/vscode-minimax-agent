@@ -71,6 +71,7 @@ export function activate(context: ExtensionContext): void {
   const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
   const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
   const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
+  const stream = config.get<boolean>('stream', false);
   const defaultAgent = config.get<string>('defaultAgent', 'mavis') || 'mavis';
   const oauthFlowRaw = config.get<string>('oauthFlow', 'auto');
 
@@ -93,6 +94,7 @@ export function activate(context: ExtensionContext): void {
     archonUrl,
     apiBase,
     model,
+    stream,
     defaultAgent: initialAgent,
     apiKey: initialApiKey,
     extensionPath: context.extensionPath,

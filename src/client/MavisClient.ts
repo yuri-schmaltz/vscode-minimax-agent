@@ -72,6 +72,8 @@ export interface MavisClientOptions {
   defaultAgent?: string;
   /** Model used for completions. Defaults to `MiniMax-M3`. */
   model?: string;
+  /** When true, the shim uses SSE streaming (MAVIS_STREAM=1). Default: false. */
+  stream?: boolean;
   /** MiniMax / archon-server API key. Passed through as MAVIS_API_KEY. */
   apiKey?: string;
   /** Force mock mode (sets MAVIS_MOCK=1 in env). Defaults to true when archonUrl is empty. */
@@ -94,7 +96,7 @@ interface RunningStream {
 }
 
 export class MavisClient {
-  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model'>> & {
+  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream'>> & {
     cliPath: string | undefined;
     archonUrl: string | undefined;
     defaultAgent: string | undefined;
@@ -103,6 +105,7 @@ export class MavisClient {
     apiKey: string | undefined;
     apiBase: string;
     model: string;
+    stream: boolean;
   };
   private readonly spawnImpl: typeof spawn;
   private readonly streams = new Set<RunningStream>();
@@ -135,6 +138,7 @@ export class MavisClient {
       defaultAgent: opts.defaultAgent,
       model: opts.model ?? 'MiniMax-M3',
       apiKey: opts.apiKey,
+      stream: opts.stream ?? false,
       mock: opts.mock ?? !opts.archonUrl,
       spawnImpl: opts.spawnImpl ?? spawn,
       resolveBundledPath:
@@ -197,6 +201,14 @@ export class MavisClient {
    */
   setApiKey(key: string | undefined): void {
     this.options.apiKey = key || undefined;
+  }
+
+  /**
+   * Toggles SSE streaming on the shim. When `true`, the shim sets
+   * `MAVIS_STREAM=1` and tries to parse the response as SSE.
+   */
+  setStream(on: boolean): void {
+    this.options.stream = Boolean(on);
   }
 
   /** Currently configured API key, or `undefined`. */
@@ -787,6 +799,7 @@ export class MavisClient {
     }
     env.MAVIS_API_BASE = this.options.apiBase;
     env.MAVIS_MODEL = this.options.model;
+    if (this.options.stream) env.MAVIS_STREAM = '1';
     if (this.options.apiKey) {
       env.MAVIS_API_KEY = this.options.apiKey;
     }

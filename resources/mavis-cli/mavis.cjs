@@ -390,15 +390,20 @@ async function cmdSessionStream() {
       await sleep(rand(50, 200));
       emit({ type: 'message', role: 'assistant', content: ' ✔', sessionId, ts: nowTs() });
     } else {
-      // Real path: OpenAI-compatible /chat/completions with stream=true.
+      // Real path: OpenAI-compatible /chat/completions. Defaults to
+      // non-streaming because the MiniMax SSE format trips up the parser
+      // in a few edge cases (mixing `delta.content` and `delta.reasoning_content`,
+      // multi-byte chunks split across reads, etc). When the parser is
+      // robust, flip the env back to '1' to get the typing effect.
       const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
+      const useStream = process.env.MAVIS_STREAM === '1';
       let res;
       try {
         res = await archonFetch('/chat/completions', {
           method: 'POST',
           body: JSON.stringify({
             model,
-            stream: true,
+            stream: useStream,
             messages: [{ role: 'user', content: text }],
           }),
         });
@@ -420,79 +425,127 @@ async function cmdSessionStream() {
         }
         continue;
       }
-      if (!res.body) {
-        emit({ type: 'error', message: 'archon /chat/completions returned no body', sessionId, ts: nowTs() });
-        continue;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf8');
-      let buffer = '';
-      let messageCount = 0;
-      let usage = null;
-      try {
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buffer.indexOf('\n')) !== -1) {
-            const rawLine = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
-            if (!rawLine) continue;
-            // SSE format: lines starting with "data:" carry the JSON.
-            // Stop sentinel: "data: [DONE]".
-            if (!rawLine.startsWith('data:')) continue;
-            const payload = rawLine.slice(5).trim();
-            if (payload === '[DONE]') {
-              buffer = '';
-              break;
+      if (useStream) {
+        if (!res.body) {
+          emit({ type: 'error', message: 'archon /chat/completions returned no body', sessionId, ts: nowTs() });
+          continue;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf8');
+        let buffer = '';
+        let messageCount = 0;
+        let usage = null;
+        try {
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let idx;
+            while ((idx = buffer.indexOf('\n')) !== -1) {
+              const rawLine = buffer.slice(0, idx).trim();
+              buffer = buffer.slice(idx + 1);
+              if (!rawLine) continue;
+              // SSE format: lines starting with "data:" carry the JSON.
+              // Stop sentinel: "data: [DONE]".
+              if (!rawLine.startsWith('data:')) continue;
+              const payload = rawLine.slice(5).trim();
+              if (payload === '[DONE]') {
+                buffer = '';
+                break;
+              }
+              try {
+                const json = JSON.parse(payload);
+                const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
+                const delta = choice && choice.delta ? choice.delta : {};
+                // OpenAI-compat: most servers use `content`. MiniMax M3
+                // sometimes streams reasoning via `reasoning_content`
+                // when thinking is enabled — surface it too so the user
+                // sees the model's thought process.
+                const content = typeof delta.content === 'string' && delta.content.length > 0
+                  ? delta.content
+                  : (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '');
+                if (content) {
+                  messageCount += 1;
+                  emit({ type: 'message', role: 'assistant', content, sessionId, ts: nowTs() });
+                }
+                if (json.usage && typeof json.usage === 'object') {
+                  usage = json.usage;
+                }
+              } catch {
+                // Ignore malformed SSE chunks; upstream may inject comments.
+              }
             }
+          }
+        } finally {
+          try { reader.releaseLock(); } catch { /* ignore */ }
+        }
+        if (messageCount === 0) {
+          // The server returned 200 but no content streamed. Two likely
+          // causes: (a) the model finished a refusal that didn't carry
+          // any text, or (b) the response is non-streaming JSON. Try to
+          // surface something so the user isn't staring at a silent chat.
+          let hint = 'archon returned 200 with no streamed content';
+          try {
+            const tail = await res.clone().text();
+            if (tail && tail.length > 0) {
+              const sample = tail.slice(0, 200);
+              hint = `archon returned 200 with no streamed content. Body sample: ${sample}`;
+            }
+          } catch {
+            /* ignore */
+          }
+          emit({ type: 'error', message: hint, sessionId, ts: nowTs() });
+        }
+        if (usage) {
+          emit({ type: 'usage', usage, sessionId, ts: nowTs() });
+        }
+      } else {
+        // Non-streaming path: full response, one emit.
+        let messageCount = 0;
+        let usage = null;
+        let lastContent = '';
+        try {
+          const body = await res.text();
+          if (body && body.length > 0) {
             try {
-              const json = JSON.parse(payload);
-              const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
-              const delta = choice && choice.delta ? choice.delta : {};
-              // OpenAI-compat: most servers use `content`. MiniMax M3
-              // sometimes streams reasoning via `reasoning_content`
-              // when thinking is enabled — surface it too so the user
-              // sees the model's thought process.
-              const content = typeof delta.content === 'string' && delta.content.length > 0
-                ? delta.content
-                : (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '');
-              if (content) {
-                messageCount += 1;
-                emit({ type: 'message', role: 'assistant', content, sessionId, ts: nowTs() });
+              const json = JSON.parse(body);
+              if (json && Array.isArray(json.choices)) {
+                for (const choice of json.choices) {
+                  const msg = choice && choice.message;
+                  if (msg && typeof msg === 'object') {
+                    // Prefer real content, fall back to reasoning
+                    // (M3 with thinking mode sometimes only emits
+                    // reasoning_content when max_tokens is small).
+                    const text = typeof msg.content === 'string' && msg.content.length > 0
+                      ? msg.content
+                      : (typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '');
+                    if (text) {
+                      lastContent = text;
+                      messageCount += 1;
+                      emit({ type: 'message', role: 'assistant', content: text, sessionId, ts: nowTs() });
+                    }
+                  }
+                }
               }
               if (json.usage && typeof json.usage === 'object') {
                 usage = json.usage;
               }
             } catch {
-              // Ignore malformed SSE chunks; upstream may inject comments.
+              emit({ type: 'error', message: 'archon /chat/completions returned non-JSON body: ' + body.slice(0, 200), sessionId, ts: nowTs() });
             }
           }
+        } catch (err) {
+          emit({ type: 'error', message: (err && err.message) || String(err), sessionId, ts: nowTs() });
         }
-      } finally {
-        try { reader.releaseLock(); } catch { /* ignore */ }
-      }
-      if (messageCount === 0) {
-        // The server returned 200 but no content streamed. Two likely
-        // causes: (a) the model finished a refusal that didn't carry
-        // any text, or (b) the response is non-streaming JSON. Try to
-        // surface something so the user isn't staring at a silent chat.
-        let hint = 'archon returned 200 with no streamed content';
-        try {
-          const tail = await res.clone().text();
-          if (tail && tail.length > 0) {
-            const sample = tail.slice(0, 200);
-            hint = `archon returned 200 with no streamed content. Body sample: ${sample}`;
-          }
-        } catch {
-          /* ignore */
+        if (messageCount === 0) {
+          emit({ type: 'error', message: 'archon returned 200 with no assistant content', sessionId, ts: nowTs() });
         }
-        emit({ type: 'error', message: hint, sessionId, ts: nowTs() });
-      }
-      if (usage) {
-        emit({ type: 'usage', usage, sessionId, ts: nowTs() });
+        if (usage) {
+          emit({ type: 'usage', usage, sessionId, ts: nowTs() });
+        }
+        // Avoid lint complaint about unused binding.
+        void lastContent;
       }
     }
   }

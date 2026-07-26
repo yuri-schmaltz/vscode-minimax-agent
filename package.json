@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -331,6 +331,11 @@
           "type": "string",
           "default": "/v1",
           "markdownDescription": "Path prefix appended to `mavis.archonUrl` for chat/completions calls. Default: `/v1` (OpenAI-compatible)."
+        },
+        "mavis.stream": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable SSE streaming for chat responses. **Default: off** — the shim uses non-streaming for reliability; the response arrives all at once after a few seconds. Turn on to get the word-by-word typing effect, but the SSE parser is still rough around the edges."
         }
       }
     }
