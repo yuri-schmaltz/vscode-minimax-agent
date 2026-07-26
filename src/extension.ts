@@ -348,7 +348,10 @@ export function activate(context: ExtensionContext): void {
       const existing = client?.getApiKey();
       const input = await window.showInputBox({
         title: 'Mavis: Set API key',
-        prompt: 'Cole aqui a sua Subscription Key do MiniMax (prefixo `sk-cp-…`). Deixe vazio para limpar.',
+        prompt:
+          'Cole aqui a sua Subscription Key do MiniMax (prefixo `sk-cp-…`). ' +
+          'Você encontra em platform.minimax.io → Console → Subscription → Plan Details. ' +
+          'Deixe vazio para limpar.',
         placeHolder: 'sk-cp-...',
         password: true,
         ignoreFocusOut: true,
@@ -356,6 +359,9 @@ export function activate(context: ExtensionContext): void {
         validateInput: (v) => {
           if (v && v.length > 0 && !v.startsWith('sk-')) {
             return 'A chave do MiniMax geralmente começa com `sk-`. Você colou o valor correto?';
+          }
+          if (v && v.startsWith('sk-api-')) {
+            return 'Essa parece ser uma API Key pay-as-you-go (sk-api-…), que precisa de créditos pré-pagos. Se você tem um Token Plan ativo, use a Subscription Key `sk-cp-…` que está em Plan Details.';
           }
           return undefined;
         },
@@ -504,15 +510,21 @@ export function activate(context: ExtensionContext): void {
       const choice = await window.showInformationMessage(
         hasKey
           ? 'Mavis está pronto. Use Cmd/Ctrl+Shift+M para abrir o chat, ou escolha uma ação abaixo.'
-          : 'Bem-vindo ao Mavis! Para começar, vincule sua conta MiniMax.',
+          : 'Bem-vindo ao Mavis! Para começar, vincule sua conta MiniMax (a chave `sk-cp-…` fica em platform.minimax.io → Subscription → Plan Details).',
         { modal: false },
         hasKey ? 'Abrir chat' : 'Definir API key',
+        hasKey ? 'Testar conexão' : 'Abrir Plan Details',
         'Abrir configurações',
       );
       if (choice === 'Definir API key') {
         await commands.executeCommand('mavis.setApiKey');
       } else if (choice === 'Abrir chat') {
         await commands.executeCommand('mavis.toggleChat');
+      } else if (choice === 'Abrir Plan Details') {
+        await env.openExternal(Uri.parse('https://platform.minimax.io/console/plan'));
+        await commands.executeCommand('mavis.setApiKey');
+      } else if (choice === 'Testar conexão') {
+        await commands.executeCommand('mavis.testConnection');
       } else if (choice === 'Abrir configurações') {
         await commands.executeCommand('workbench.action.openSettings', 'mavis');
       }
