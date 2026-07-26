@@ -177,6 +177,11 @@ export function activate(context: ExtensionContext): void {
     onOpenSettings: () => commands.executeCommand('workbench.action.openSettings', 'mavis'),
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
+    onNewSession: (id: string, agent: string) => {
+      // Auto-created on first open; persist so it shows up in the
+      // session list and survives reloads.
+      void sessionCache?.pushRecent({ id, agent, title: 'New chat' });
+    },
   });
   context.subscriptions.push(
     window.registerWebviewViewProvider('mavis.chatView', chatView, {

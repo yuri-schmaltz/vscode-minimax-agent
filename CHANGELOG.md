@@ -6,6 +6,20 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.8] — 2026-07-26 (Chat abre pronto: sessão + foco automáticos)
+
+### Changed
+- **Chat já vem com sessão ativa no primeiro open.** Não precisa mais
+  clicar em "New" — o `ChatViewProvider.resolveWebviewView` agora
+  detecta se não tem sessão e cria uma via `deps.newSessionId()`,
+  registra no `SessionCache` (via `onNewSession`) e foca o input
+  automaticamente (`focusInput` message). O textarea recebe focus
+  programaticamente 80ms após o mount pra evitar race com a
+  hidratação.
+- O `placeholder` do input mudou de comportamento: agora é sempre
+  "Type a message…" (não alterna mais pra "Press New to start a
+  session" porque sempre tem sessão).
+
 ## [0.3.7] — 2026-07-26 (Chat agora responde: non-streaming por default)
 
 ### Fixed

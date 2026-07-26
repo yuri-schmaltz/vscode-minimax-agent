@@ -147,12 +147,16 @@ test('ChatViewProvider: newSession calls deps.newSessionId and emits sessionChan
   // For a clean test, we expose a tiny test backdoor: just call the
   // public setSession() to mimic the newSession side-effect.
   provider.setSession('sess_advertised', 'mavis-coder');
-  const changed = webview.posted.find(
+  // resolveWebviewView now auto-creates a session on open, so the
+  // first sessionChanged message is the auto-created one. The call
+  // above should be the LAST sessionChanged posted.
+  const changes = webview.posted.filter(
     (m) => (m as HostToWebview).type === 'sessionChanged',
-  ) as Extract<HostToWebview, { type: 'sessionChanged' }> | undefined;
-  assert.ok(changed, 'expected a sessionChanged postMessage');
-  assert.equal(changed.session?.id, 'sess_advertised');
-  assert.equal(changed.session?.agent, 'mavis-coder');
+  ) as Array<Extract<HostToWebview, { type: 'sessionChanged' }>>;
+  assert.ok(changes.length >= 1, 'expected at least one sessionChanged postMessage');
+  const last = changes[changes.length - 1];
+  assert.equal(last.session?.id, 'sess_advertised');
+  assert.equal(last.session?.agent, 'mavis-coder');
 });
 
 test('ChatViewProvider: postError sends a "error" message (no token-shaped fields)', () => {

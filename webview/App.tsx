@@ -139,6 +139,16 @@ export function App(): JSX.Element {
         case 'tabs':
           setTabs(msg.tabs);
           break;
+        case 'focusInput':
+          // Triggered by the host when the panel becomes visible so
+          // the user can type immediately without clicking the
+          // textarea first. Deferred via setTimeout because the
+          // webview might not be fully mounted yet.
+          setTimeout(() => {
+            const ta = document.querySelector('textarea.mavis-input') as HTMLTextAreaElement | null;
+            if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+          }, 0);
+          break;
       }
     }
     window.addEventListener('message', onMessage);
@@ -278,6 +288,7 @@ export function App(): JSX.Element {
 
       <footer className="mavis-footer">
         <textarea
+          className="mavis-input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}

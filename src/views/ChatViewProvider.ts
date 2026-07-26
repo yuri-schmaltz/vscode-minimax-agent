@@ -72,7 +72,8 @@ export type HostToWebview =
   | { type: 'apiKeyMissing' }
   | { type: 'history'; messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }> }
   | { type: 'tabs'; tabs: Array<{ id: string; agent: string; title: string; active: boolean }> }
-  | { type: 'attachments'; attachments: Attachment[] };
+  | { type: 'attachments'; attachments: Attachment[] }
+  | { type: 'focusInput' };
 
 export interface ChatViewDeps {
   client: MavisClient;
@@ -86,6 +87,9 @@ export interface ChatViewDeps {
   recentSessions?: () => Array<{ id: string; agent: string; title: string }>;
   /** Called when the user closes a tab in the webview (not the server). */
   onTabClosed?: (sessionId: string) => void;
+  /** Called when the chat view auto-creates a session on open. Lets
+   * the host persist it in the SessionCache. */
+  onNewSession?: (sessionId: string, agent: string) => void;
 }
 
 export class ChatViewProvider implements WebviewViewProvider {
@@ -125,6 +129,20 @@ export class ChatViewProvider implements WebviewViewProvider {
         this.postError(message);
       }
     });
+
+    // Always have an active session ready — no "click New first" needed.
+    // If the client already has a session from activation (the
+    // SessionCache hydrates one), reuse it. Otherwise mint a fresh
+    // one so the input is immediately usable.
+    if (!this.currentSession) {
+      const id = this.deps.newSessionId();
+      this.setSession(id, this.deps.defaultAgent);
+      try { this.deps.client.setActiveSession(id); } catch { /* noop */ }
+      try { void this.deps.client.setActiveAgent(this.deps.defaultAgent); } catch { /* noop */ }
+      void this.deps.onNewSession?.(id, this.deps.defaultAgent);
+    }
+    // Defer the focus so the webview is mounted before we touch it.
+    setTimeout(() => { try { this.view?.webview.postMessage({ type: 'focusInput' }); } catch { /* noop */ } }, 80);
 
     this.wireClientEvents();
   }
