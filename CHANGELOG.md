@@ -6,6 +6,29 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.12] — 2026-07-26 (FIX CRÍTICO: shim travava esperando stdin fechar — chat respondia depois de 15s com timeout)
+
+### Fixed
+- **Bug crítico que silenciava o chat mesmo com URL correta**: a
+  função `readStdinLines` no shim esperava o evento `'end'` do stdin
+  antes de processar qualquer prompt. O host escreve prompts via
+  `child.stdin.write(...)` mas **nunca fecha o stdin** (o stream
+  continua aberto pra múltiplos prompts). Resultado: o shim ficava
+  travado no `await readStdinLines()` eternamente. O log de startup
+  aparecia, o `[stream] start` aparecia no host, mas nenhuma
+  request HTTP era feita → timeout de 15s no webview.
+
+  Reescrito como `readStdinLinesStream()` (async generator) que
+  yielda cada linha assim que ela chega no stdin. O `done` agora é
+  emitido por prompt (não por stream) pra o host saber que a
+  resposta daquela mensagem está completa.
+
+### Added
+- 2 testes de smoke (`test/shim/sessionStream.test.cjs`) que
+  spawnam o shim em modo MOCK, escrevem 1 ou 2 prompts sem fechar
+  stdin, e verificam que o shim emite `message` + `done` pra cada
+  um sem travar.
+
 ## [0.3.11] — 2026-07-26 (FIX CRÍTICO: shim estava batendo em /chat/completions sem o /v1)
 
 ### Fixed

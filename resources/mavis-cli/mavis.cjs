@@ -331,25 +331,72 @@ function cmdSessionList() {
   emit({ type: 'done', count: sessions.length });
 }
 
-function readStdinLines() {
-  return new Promise((resolve, reject) => {
-    const lines = [];
-    let buf = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
-      buf += chunk;
-      let idx;
-      while ((idx = buf.indexOf('\n')) !== -1) {
-        lines.push(buf.slice(0, idx));
-        buf = buf.slice(idx + 1);
+// Async generator that yields newline-terminated lines from stdin as
+// they arrive. The host writes one prompt per call to stdin (without
+// closing the pipe); the previous readStdinLines waited for 'end',
+// which never fired, so the shim sat idle forever.
+async function* readStdinLinesStream() {
+  process.stdin.setEncoding('utf8');
+  let buf = '';
+  // We need to await lines on demand. Use a queue + resolver.
+  const queue = [];
+  let resolveNext = null;
+  let ended = false;
+  let error = null;
+  process.stdin.on('data', (chunk) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r({ value: line, done: false });
+      } else {
+        queue.push(line);
       }
-    });
-    process.stdin.on('end', () => {
-      if (buf.length) lines.push(buf);
-      resolve(lines);
-    });
-    process.stdin.on('error', reject);
+    }
   });
+  process.stdin.on('end', () => {
+    if (buf.length) {
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r({ value: buf, done: false });
+      } else {
+        queue.push(buf);
+      }
+      buf = '';
+    }
+    ended = true;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r({ value: undefined, done: true });
+    }
+  });
+  process.stdin.on('error', (err) => {
+    error = err;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r({ value: undefined, done: true });
+    }
+  });
+  while (true) {
+    if (queue.length > 0) {
+      yield queue.shift();
+      continue;
+    }
+    if (error) throw error;
+    if (ended) return;
+    const next = await new Promise((resolve) => {
+      resolveNext = resolve;
+    });
+    if (next.done) return;
+    yield next.value;
+  }
 }
 
 async function cmdSessionStream() {
@@ -375,9 +422,9 @@ async function cmdSessionStream() {
   // Send a "ready" beacon so the consumer can wire UI before the first token.
   emit({ type: 'ready', sessionId, mock: MOCK, ts: nowTs() });
 
-  const lines = await readStdinLines();
-
-  for (const raw of lines) {
+  // Stream prompts from stdin as they arrive (one line per call from
+  // the host's sendPrompt). No longer waits for stdin to close.
+  for await (const raw of readStdinLinesStream()) {
     const line = raw.trim();
     if (!line) continue;
     let prompt;
@@ -562,9 +609,11 @@ async function cmdSessionStream() {
         void lastContent;
       }
     }
+    // Mark this prompt's response as complete. With the streaming
+    // stdin reader, the host expects a 'done' per prompt so it can
+    // clear the pending flag and unblock the UI.
+    emit({ type: 'done', sessionId });
   }
-
-  emit({ type: 'done', sessionId });
 }
 
 function cmdSessionNew() {
