@@ -35,6 +35,8 @@ export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'newSession'; agent?: string }
   | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; contextFiles?: string[]; toolsEnabled?: boolean; model?: string }
+  | { type: 'loopPrompt'; sessionId: string; text: string; iterations: number }
+  | { type: 'cancelLoop'; sessionId: string }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'requestSetApiKey' }
@@ -81,6 +83,7 @@ export type HostToWebview =
   | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
   | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
   | { type: 'error'; message: string }
+  | { type: 'loopStatus'; sessionId: string; iteration: number; total: number; status: 'running' | 'done' | 'cancelled' | 'error'; error?: string }
   | { type: 'apiKeyMissing' }
   | { type: 'history'; messages: Array<{ id: string; role: 'user' | 'assistant' | 'system'; text: string; ts: number }> }
   | { type: 'tabs'; tabs: Array<{ id: string; agent: string; title: string; active: boolean }> }
@@ -148,6 +151,10 @@ export class ChatViewProvider implements WebviewViewProvider {
     if (list.length > 0) this.defaultModel = list[0];
   }
   private themeName: string;
+  /** Active loop state (B.6+). When set, the host re-sends the
+   * loop's text after each `done` event until `iteration`
+   * reaches `total` (or the user cancels). Per-session. */
+  private loops: Map<string, { text: string; iteration: number; total: number; active: boolean }> = new Map();
 
   setTheme(theme: string): void {
     this.themeName = theme || 'default';
@@ -172,6 +179,80 @@ export class ChatViewProvider implements WebviewViewProvider {
     if (!sid) return;
     this.sessionAgent.set(sid, agent);
     this.postToWebview({ type: 'agentChanged', sessionId: sid, agent });
+  }
+
+  // ------------------------------------------------------------------ loops
+  // B.6+ — /loop slash command. The webview parses the input and
+  // sends a `loopPrompt` message; the host re-sends the prompt N
+  // times after each `done` event, until the user cancels or the
+  // iteration count is exhausted.
+
+  /** Start a loop for the given session. Re-sends `text` `total`
+   * times, one after each previous response finishes. */
+  startLoop(sessionId: string, text: string, total: number): void {
+    if (total < 1) total = 1;
+    if (total > 10) total = 10; // safety cap
+    this.loops.set(sessionId, { text, iteration: 0, total, active: true });
+    this.postToWebview({
+      type: 'loopStatus',
+      sessionId,
+      iteration: 0,
+      total,
+      status: 'running',
+    });
+  }
+
+  /** Cancel an active loop. */
+  cancelLoop(sessionId: string): void {
+    const loop = this.loops.get(sessionId);
+    if (!loop || !loop.active) return;
+    loop.active = false;
+    this.loops.delete(sessionId);
+    this.postToWebview({
+      type: 'loopStatus',
+      sessionId,
+      iteration: loop.iteration,
+      total: loop.total,
+      status: 'cancelled',
+    });
+  }
+
+  /** Called from onStreamEvent when a `done` arrives. If a loop is
+   * active for this session, advances the counter and re-sends
+   * the same prompt. Returns true if the loop is still running. */
+  private advanceLoop(sessionId: string): boolean {
+    const loop = this.loops.get(sessionId);
+    if (!loop || !loop.active) return false;
+    loop.iteration += 1;
+    if (loop.iteration >= loop.total) {
+      this.loops.delete(sessionId);
+      this.postToWebview({
+        type: 'loopStatus',
+        sessionId,
+        iteration: loop.iteration,
+        total: loop.total,
+        status: 'done',
+      });
+      return false;
+    }
+    this.postToWebview({
+      type: 'loopStatus',
+      sessionId,
+      iteration: loop.iteration,
+      total: loop.total,
+      status: 'running',
+    });
+    // Re-send the same prompt. The shim appends to its history,
+    // so the model sees its previous work and refines.
+    void this.replayPrompt(sessionId, loop.text);
+    return true;
+  }
+
+  /** Re-send the same prompt to an already-open stream. We just
+   * call handleSendPrompt with `echoUserMessage = false` so the
+   * userMessage isn't re-posted (the user already saw it). */
+  private async replayPrompt(sessionId: string, text: string): Promise<void> {
+    await this.handleSendPrompt(sessionId, text, 'builder', false);
   }
 
   resolveWebviewView(
@@ -381,6 +462,62 @@ export class ChatViewProvider implements WebviewViewProvider {
 
   // ----------------------------------------------------------------- private
 
+  /** Internal: do everything the sendPrompt case does. The
+   * `echoUserMessage` flag controls whether we post a `userMessage`
+   * event back to the webview. We set it to false for loop
+   * replays (the user already saw the prompt on iteration 1). */
+  private async handleSendPrompt(
+    sessionId: string,
+    text: string,
+    mode: 'builder' | 'plan',
+    echoUserMessage = true,
+  ): Promise<void> {
+    if (!sessionId) return;
+    // Pre-flight: if no API key is set, tell the user before the
+    // shim ever tries to talk to the backend. This avoids a
+    // confusing "no response" UI when the only problem is the
+    // missing key.
+    if (!this.deps.client.getApiKey?.()) {
+      this.postToWebview({ type: 'apiKeyMissing' });
+    }
+    if (echoUserMessage) {
+      const userMsg = { id: 'u_' + Date.now().toString(36), text, ts: Date.now() };
+      this.postToWebview({ type: 'userMessage', msg: userMsg });
+    }
+    await this.ensureStream(sessionId);
+    // Build the prompt envelope. When tools are enabled, the
+    // shim runs the agent loop (B.1+); when tools are disabled
+    // the legacy single-shot chat path runs (back-compat).
+    const sid = this.currentSession!.id;
+    const model = this.sessionModel.get(sid) ?? this.defaultModel;
+    // Per-session agent: the user's custom persona (or the
+    // first entry of mavis.agents). The agent's tools list
+    // filters the available tool manifest before passing to
+    // the shim (B.8).
+    const agents = this.deps.getAgents?.() ?? [];
+    const agentName = this.sessionAgent.get(sid) ?? this.defaultAgentName;
+    const agent = agents.find((a) => a.name === agentName) ?? agents[0];
+    const allTools = this.deps.getTools?.(mode) ?? [];
+    // Cast allTools to the local ToolDefinition type (the manifest
+    // module exports its own narrower type).
+    const allToolsTyped = allTools as Array<{
+      name: string;
+      description: string;
+      parameters: { type: 'object'; properties: Record<string, { type: string; description: string; enum?: string[]; items?: unknown }>; required?: string[] };
+    }>;
+    const tools = (this.deps.getTools ?
+      (agentTools(agent, allToolsTyped) as unknown as Array<{ name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } }>)
+      : null);
+    this.currentHandle?.sendPrompt({
+      text,
+      tools: tools ?? undefined,
+      mode,
+      contextFiles: [],
+      model,
+      agent: agent ? { name: agent.name, systemPrompt: agentSystemPrompt(agent) } : undefined,
+    });
+  }
+
   private async handleWebviewMessage(msg: WebviewToHost): Promise<void> {
     this.onMessageFromWebview.fire(msg);
     switch (msg.type) {
@@ -414,49 +551,22 @@ export class ChatViewProvider implements WebviewViewProvider {
         return;
       }
       case 'sendPrompt': {
-        const sessionId = msg.sessionId;
-        if (!sessionId) return;
-        // Pre-flight: if no API key is set, tell the user before
-        // the shim ever tries to talk to the backend. This avoids
-        // a confusing "no response" UI when the only problem is the
-        // missing key.
-        if (!this.deps.client.getApiKey?.()) {
-          this.postToWebview({ type: 'apiKeyMissing' });
-        }
-        const userMsg = { id: 'u_' + Date.now().toString(36), text: msg.text, ts: Date.now() };
-        this.postToWebview({ type: 'userMessage', msg: userMsg });
-        await this.ensureStream(sessionId);
-        // Build the prompt envelope. When tools are enabled, the
-        // shim runs the agent loop (B.1+); when tools are disabled
-        // the legacy single-shot chat path runs (back-compat).
-        const sid = this.currentSession!.id;
-        const model = this.sessionModel.get(sid) ?? this.defaultModel;
-        // Per-session agent: the user's custom persona (or the
-        // first entry of mavis.agents). The agent's tools list
-        // filters the available tool manifest before passing to
-        // the shim (B.8).
-        const agents = this.deps.getAgents?.() ?? [];
-        const agentName = this.sessionAgent.get(sid) ?? this.defaultAgentName;
-        const agent = agents.find((a) => a.name === agentName) ?? agents[0];
-        const allTools = this.deps.getTools?.(msg.mode ?? 'builder') ?? [];
-        // Cast allTools to the local ToolDefinition type (the manifest
-        // module exports its own narrower type).
-        const allToolsTyped = allTools as Array<{
-          name: string;
-          description: string;
-          parameters: { type: 'object'; properties: Record<string, { type: string; description: string; enum?: string[]; items?: unknown }>; required?: string[] };
-        }>;
-        const tools = msg.toolsEnabled !== false
-          ? (agentTools(agent, allToolsTyped) as unknown as Array<{ name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } }>)
-          : null;
-        this.currentHandle?.sendPrompt({
-          text: msg.text,
-          tools: tools ?? undefined,
-          mode: msg.mode ?? 'builder',
-          contextFiles: msg.contextFiles ?? [],
-          model,
-          agent: agent ? { name: agent.name, systemPrompt: agentSystemPrompt(agent) } : undefined,
-        });
+        await this.handleSendPrompt(msg.sessionId, msg.text, msg.mode ?? 'builder', true);
+        return;
+      }
+      case 'loopPrompt': {
+        // /loop <iterations> <text>. Start a loop; the first
+        // prompt is sent immediately via handleSendPrompt (which
+        // also echoes the userMessage). Subsequent iterations are
+        // replayed by advanceLoop() after each `done` event.
+        if (!msg.iterations || msg.iterations < 1) return;
+        const iterations = Math.min(10, Math.max(1, Math.floor(msg.iterations)));
+        this.startLoop(msg.sessionId, msg.text, iterations);
+        await this.handleSendPrompt(msg.sessionId, msg.text, 'builder', true);
+        return;
+      }
+      case 'cancelLoop': {
+        this.cancelLoop(msg.sessionId);
         return;
       }
       case 'loadHistory': {
@@ -576,6 +686,13 @@ export class ChatViewProvider implements WebviewViewProvider {
           done: true,
         },
       });
+      // B.6+ — if a loop is active for this session, advance the
+      // counter. If more iterations remain, replayPrompt() will
+      // fire another prompt; if exhausted, the loop is closed.
+      const sessionId = this.currentSession?.id;
+      if (sessionId) {
+        this.advanceLoop(sessionId);
+      }
       return;
     }
     if (kind === 'message') {

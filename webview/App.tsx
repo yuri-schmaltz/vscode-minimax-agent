@@ -127,6 +127,10 @@ export function App(): JSX.Element {
   const [availableAgents, setAvailableAgents] = useState<Array<{ name: string; description: string }>>([]);
   const [currentAgent, setCurrentAgent] = useState<string>('');
   const [contextFiles] = useState<string[]>([]);
+  // B.6+ — /loop status banner. When a loop is running, show a
+  // small "Loop X/3" indicator with a Stop button. When done,
+  // the banner fades to "Loop complete" / "Cancelled" / "Error".
+  const [loopStatus, setLoopStatus] = useState<{ iteration: number; total: number; status: 'running' | 'done' | 'cancelled' | 'error' } | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // Wire host → webview messages.
@@ -203,6 +207,19 @@ export function App(): JSX.Element {
         case 'agentChanged':
           setCurrentAgent(msg.agent);
           break;
+        case 'loopStatus':
+          setLoopStatus({
+            iteration: msg.iteration,
+            total: msg.total,
+            status: msg.status,
+          });
+          // Auto-dismiss the banner a few seconds after the loop
+          // ends (done/cancelled/error). A running banner stays
+          // visible until the loop finishes or the user clicks Stop.
+          if (msg.status !== 'running') {
+            setTimeout(() => setLoopStatus(null), 4000);
+          }
+          break;
         case 'toolResult':
           setTools((prev) =>
             prev.map((t) =>
@@ -278,6 +295,41 @@ export function App(): JSX.Element {
   const sendDraft = useCallback(() => {
     const text = draft.trim();
     if (!text || !session) return;
+    // /loop <iterations> <text...>
+    // The /loop slash command runs the same prompt N times. The
+    // host re-sends the prompt after each `done` event so the
+    // model sees its previous work and refines. Default
+    // iterations: 3. Cap: 10.
+    const loopMatch = /^\/loop\s+(\d+)\s+([\s\S]+)$/.exec(text);
+    const loopMatchDefault = /^\/loop\s+([\s\S]+)$/.exec(text);
+    if (loopMatch) {
+      const iterations = parseInt(loopMatch[1], 10);
+      const loopText = loopMatch[2].trim();
+      if (loopText && iterations >= 1 && iterations <= 10) {
+        postToHost({
+          type: 'loopPrompt',
+          sessionId: session.id,
+          text: loopText,
+          iterations,
+        });
+        setDraft('');
+        setTools([]);
+        setReasoning(null);
+        return;
+      }
+    } else if (loopMatchDefault && loopMatchDefault[1].trim()) {
+      // /loop with no count: default to 3.
+      postToHost({
+        type: 'loopPrompt',
+        sessionId: session.id,
+        text: loopMatchDefault[1].trim(),
+        iterations: 3,
+      });
+      setDraft('');
+      setTools([]);
+      setReasoning(null);
+      return;
+    }
     postToHost({
       type: 'sendPrompt',
       sessionId: session.id,
@@ -495,6 +547,34 @@ export function App(): JSX.Element {
         )}
       </div>
 
+      {loopStatus && (
+        <div className="mavis-loop-banner" role="status" aria-live="polite">
+          {loopStatus.status === 'running' && (
+            <>
+              <span className="mavis-loop-label">
+                🔁 Loop {loopStatus.iteration + 1}/{loopStatus.total}
+              </span>
+              <button
+                type="button"
+                className="mavis-loop-stop"
+                onClick={() => postToHost({ type: 'cancelLoop', sessionId: session?.id ?? '' })}
+              >
+                Stop
+              </button>
+            </>
+          )}
+          {loopStatus.status === 'done' && (
+            <span className="mavis-loop-label">✅ Loop complete ({loopStatus.total} iterations)</span>
+          )}
+          {loopStatus.status === 'cancelled' && (
+            <span className="mavis-loop-label">⏹ Loop cancelled at iteration {loopStatus.iteration + 1}/{loopStatus.total}</span>
+          )}
+          {loopStatus.status === 'error' && (
+            <span className="mavis-loop-label mavis-loop-error">⚠ Loop stopped due to error</span>
+          )}
+        </div>
+      )}
+
       <footer className="mavis-footer">
         <textarea
           className="mavis-input"
@@ -503,7 +583,9 @@ export function App(): JSX.Element {
           onKeyDown={onKeyDown}
           placeholder={
             session
-              ? (pending > 0 ? `Processando… (${pending} na fila)` : 'Type a message…')
+              ? (pending > 0
+                  ? `Processando… (${pending} na fila)`
+                  : 'Type a message…  /loop <N> <text> runs the prompt N times')
               : 'Press “New” to start a session.'
           }
           rows={3}
