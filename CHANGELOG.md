@@ -6,6 +6,42 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-07-26 (B.8: custom agents + B.7: concurrent prompts)
+
+### Added (B.8 — Custom agents)
+- **Custom agents** in `mavis.agents` setting. Each agent has:
+  - `name` (e.g. 'mavis', 'test-runner', 'docs-writer')
+  - `description` (shown in the status bar / dropdown)
+  - `model` (default model for the agent; overridable per-session)
+  - `systemPrompt` (extra persona; prepended to the default Builder/Plan prompt)
+  - `tools` (subset of `read`, `write`, `bash`, `agent-md`, or `all`)
+- **Per-session agent**: each tab remembers the agent. Switching in
+  one tab doesn't affect others.
+- **Agent dropdown** in the chat header (next to the model dropdown).
+  New sessions inherit the first entry of `mavis.agents`.
+- The agent's tool whitelist filters the tool manifest before
+  passing to the shim, so an "read-only" agent can't accidentally
+  call `write_file` even if the model tries.
+- 9 new unit tests for the agents module (B.8).
+
+### Added (B.7 — Concurrent prompts)
+- **Pending state is now a counter, not a boolean**. The user can
+  send multiple messages while the shim is still processing
+  earlier ones. The shim's for-await loop processes them in order.
+- **Placeholder shows queue size**: when pending > 0, the input
+  placeholder becomes "Processando… (N na fila)".
+- **15s timeout is per-prompt**: if the oldest pending prompt
+  times out, the user sees the timeout banner; subsequent prompts
+  are still tracked.
+
+### Deferred (next round)
+- **B.6 — MCP servers**: the host module is implemented (McpManager
+  in `src/agent/mcp.ts` with stdio transport) but the shim
+  doesn't yet route `mcp__<server>__<tool>` calls. Needs a
+  bidirectional stdin/stdout protocol change in the shim. Will
+  land in v0.9.x or v0.10.0.
+
+## [0.8.0] — 2026-07-26 (B.5 polish: model dropdown no header do chat)
 ## [0.8.0] — 2026-07-26 (B.5 polish: model dropdown no header do chat)
 
 ### Added

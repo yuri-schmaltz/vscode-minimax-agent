@@ -499,3 +499,23 @@ body,
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* B.8 — Agent dropdown (mirrors the model dropdown). */
+.mavis-agent-select {
+  background: var(--vscode-dropdown-background, var(--mavis-input-bg));
+  color: var(--vscode-dropdown-foreground, var(--mavis-fg));
+  border: 1px solid var(--vscode-dropdown-border, var(--mavis-border));
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-right: 6px;
+  max-width: 140px;
+}
+.mavis-agent-select:hover {
+  border-color: var(--vscode-focusBorder, var(--mavis-accent));
+}
+.mavis-agent-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

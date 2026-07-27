@@ -44,6 +44,8 @@ type HostToWebview =
   | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
   | { type: 'modelChanged'; sessionId: string; model: string }
   | { type: 'availableModels'; models: string[]; default: string }
+  | { type: 'agentChanged'; sessionId: string; agent: string }
+  | { type: 'availableAgents'; agents: Array<{ name: string; description: string }>; default: string }
   | { type: 'error'; message: string }
   | {
       type: 'history';
@@ -80,13 +82,19 @@ export function App(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [pending, setPending] = useState(false);
+  // B.7 — pending is a counter (not a boolean) so the user can
+  // send multiple messages while the shim is processing earlier
+  // ones. The shim's for-await loop processes prompts in order,
+  // so each one is acknowledged with a separate assistantMessage.
+  const [pending, setPending] = useState(0);
   const [tabs, setTabs] = useState<Array<{ id: string; agent: string; title: string; active: boolean }>>([]);
   const [tools, setTools] = useState<Array<{ id: string; name: string; args: unknown; result?: unknown; status: 'running' | 'done' | 'error' }>>([]);
   const [reasoning, setReasoning] = useState<string | null>(null);
   const [mode, setMode] = useState<'builder' | 'plan'>('builder');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState<string>('');
+  const [availableAgents, setAvailableAgents] = useState<Array<{ name: string; description: string }>>([]);
+  const [currentAgent, setCurrentAgent] = useState<string>('');
   const [contextFiles] = useState<string[]>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -111,11 +119,11 @@ export function App(): JSX.Element {
           // a spinner / pending indicator. The pending flag is cleared
           // by the next assistantMessage, by an error, or by the
           // 15-second timeout below.
-          setPending(true);
+          setPending((p) => p + 1);
           setError(null);
           break;
         case 'assistantMessage':
-          setPending(false);
+          setPending((p) => Math.max(0, p - 1));
           setMessages((m) => {
             if (msg.delta.done) return m; // last chunk already appended
             const text = msg.delta.text;
@@ -138,7 +146,7 @@ export function App(): JSX.Element {
           });
           break;
         case 'error':
-          setPending(false);
+          setPending((p) => Math.max(0, p - 1));
           setError(msg.message);
           break;
         case 'reasoning':
@@ -154,8 +162,15 @@ export function App(): JSX.Element {
           setAvailableModels(msg.models);
           if (msg.default) setCurrentModel(msg.default);
           break;
+        case 'availableAgents':
+          setAvailableAgents(msg.agents);
+          if (msg.default) setCurrentAgent(msg.default);
+          break;
         case 'modelChanged':
           setCurrentModel(msg.model);
+          break;
+        case 'agentChanged':
+          setCurrentAgent(msg.agent);
           break;
         case 'toolResult':
           setTools((prev) =>
@@ -212,9 +227,9 @@ export function App(): JSX.Element {
   // banner with a Test Connection button so the user can diagnose
   // without having to dig through the Mavis output channel.
   useEffect(() => {
-    if (!pending) return;
+    if (pending === 0) return;
     const handle = window.setTimeout(() => {
-      setPending(false);
+      setPending((p) => Math.max(0, p - 1));
       setError(
         'O Mavis demorou demais pra responder. Rode "Mavis: Test connection" no Command Palette para diagnosticar a rede, ou abra "Mavis: Open Output" para ver o stderr do shim.',
       );
@@ -239,6 +254,7 @@ export function App(): JSX.Element {
       mode,
       toolsEnabled: true,
       model: currentModel || undefined,
+      agent: currentAgent || undefined,
       // B.1: chips for @-mentions are not yet wired in the webview
       // (autocomplete is B.5). The host will accept contextFiles and
       // forward them to the shim when present.
@@ -247,7 +263,7 @@ export function App(): JSX.Element {
     setDraft('');
     setTools([]);
     setReasoning(null);
-  }, [draft, session, mode, contextFiles, currentModel]);
+  }, [draft, session, mode, contextFiles, currentModel, currentAgent]);
 
   const toggleMode = useCallback(() => {
     setMode((m) => (m === 'builder' ? 'plan' : 'builder'));
@@ -315,6 +331,18 @@ export function App(): JSX.Element {
             {availableModels.length === 0 && <option value="">loading…</option>}
             {availableModels.map((m) => (
               <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <select
+            className="mavis-agent-select"
+            value={currentAgent}
+            onChange={(e) => postToHost({ type: 'setAgent', agent: e.target.value, sessionId: session?.id })}
+            title="Agent persona for this session (see mavis.agents setting)"
+            disabled={!session || availableAgents.length === 0}
+          >
+            {availableAgents.length === 0 && <option value="">loading…</option>}
+            {availableAgents.map((a) => (
+              <option key={a.name} value={a.name}>{a.name}</option>
             ))}
           </select>
           <button
@@ -386,7 +414,7 @@ export function App(): JSX.Element {
                 Definir API key
               </button>
             )}
-            {(pending === false) && (/demorou|timeout|Test connection|Testar conexão|Teste a conexão|conexão|connection/i.test(error) || /demorou/i.test(error)) && (
+            {(pending === 0) && (/demorou|timeout|Test connection|Testar conexão|Teste a conexão|conexão|connection/i.test(error) || /demorou/i.test(error)) && (
               <>
                 <button
                   className="mavis-error-action"
@@ -442,7 +470,11 @@ export function App(): JSX.Element {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={session ? 'Type a message…' : 'Press “New” to start a session.'}
+          placeholder={
+            session
+              ? (pending > 0 ? `Processando… (${pending} na fila)` : 'Type a message…')
+              : 'Press “New” to start a session.'
+          }
           rows={3}
           disabled={!session}
         />

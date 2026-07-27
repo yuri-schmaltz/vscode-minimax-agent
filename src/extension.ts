@@ -42,6 +42,7 @@ import { MavisInlineCompletionProvider, INLINE_EDIT_SELECTOR } from './inline/In
 import { MavisNotebookControllerProvider } from './notebook/MavisNotebookController';
 import { MavisTaskProvider } from './tasks/MavisTaskProvider';
 import { getToolManifest } from './agent/manifest';
+import { AgentDefinition } from './agent/agents';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
@@ -208,6 +209,12 @@ export function activate(context: ExtensionContext): void {
     onLog: (line) => mavisOutput?.appendLine(`[mavis:chat] ${line}`),
     getTools: (mode) => getToolManifest(mode),
     getAvailableModels: () => config.get<string[]>('models', []),
+    getAgents: () => {
+      const list = config.get<AgentDefinition[]>('agents', [
+        { name: 'mavis', description: 'Default Mavis agent (Builder + Plan modes, all tools).', tools: ['all'] },
+      ]);
+      return list;
+    },
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
     onNewSession: (id: string, agent: string) => {

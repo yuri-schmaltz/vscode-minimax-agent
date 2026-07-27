@@ -60,6 +60,12 @@ export interface PromptMessage {
   contextFiles?: string[];
   /** Per-prompt model override. Defaults to MAVIS_MODEL env var. */
   model?: string;
+  /** Per-prompt agent. The shim prepends the agent's systemPrompt
+   * to its default Builder/Plan system prompt. */
+  agent?: {
+    name: string;
+    systemPrompt?: string;
+  };
 }
 
 /** What the consumer (webview) receives. */
@@ -72,7 +78,7 @@ export interface AssistantMessage {
 
 /** Handle returned from `streamSession`. */
 export interface StreamHandle {
-  sendPrompt(envelope: { text: string; tools?: PromptMessage['tools']; mode?: PromptMessage['mode']; contextFiles?: PromptMessage['contextFiles']; model?: PromptMessage['model'] } | string): void;
+  sendPrompt(envelope: { text: string; tools?: PromptMessage['tools']; mode?: PromptMessage['mode']; contextFiles?: PromptMessage['contextFiles']; model?: PromptMessage['model']; agent?: PromptMessage['agent'] } | string): void;
   close(): void;
   on(event: ClientEvent, listener: (e: StreamEvent) => void): () => void;
   off(event: ClientEvent, listener: (e: StreamEvent) => void): void;

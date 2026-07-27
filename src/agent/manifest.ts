@@ -141,6 +141,10 @@ export const READ_ONLY_TOOLS: ToolDefinition[] = READ_TOOLS;
 export const BUILDER_TOOLS: ToolDefinition[] = [...READ_TOOLS, ...WRITE_TOOLS];
 
 /** Return the tool manifest for the given mode. */
-export function getToolManifest(mode: 'builder' | 'plan' = 'builder'): ToolDefinition[] {
-  return mode === 'plan' ? READ_ONLY_TOOLS : BUILDER_TOOLS;
+export function getToolManifest(
+  mode: 'builder' | 'plan' = 'builder',
+  extra: ToolDefinition[] = [],
+): ToolDefinition[] {
+  const base = mode === 'plan' ? READ_ONLY_TOOLS : BUILDER_TOOLS;
+  return [...base, ...extra];
 }

@@ -98,6 +98,9 @@ function makeProvider(client = makeClient()) {
     client,
     newSessionId: () => `sess_test_${++counter}`,
     defaultAgent: 'mavis',
+    getTools: () => [],
+    getAvailableModels: () => ['MiniMax-M3'],
+    getAgents: () => [{ name: 'mavis', description: 'Default Mavis agent.' }],
   });
   // The view is a structural duck-type for vscode.WebviewView; we cast to
   // satisfy the constructor signature.

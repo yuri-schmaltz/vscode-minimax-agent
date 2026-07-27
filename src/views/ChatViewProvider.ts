@@ -40,6 +40,7 @@ export type WebviewToHost =
   | { type: 'testConnection' }
   | { type: 'openOutput' }
   | { type: 'setModel'; model: string; sessionId?: string }
+  | { type: 'setAgent'; agent: string; sessionId?: string }
   | { type: 'copyToClipboard'; text: string }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'closeTab'; sessionId: string }
@@ -73,6 +74,8 @@ export type HostToWebview =
   | { type: 'assistantMessage'; delta: { text: string; sessionId: string; ts: number; done?: boolean } }
   | { type: 'reasoning'; content: string; sessionId: string; ts: number }
   | { type: 'modelChanged'; sessionId: string; model: string }
+  | { type: 'agentChanged'; sessionId: string; agent: string }
+  | { type: 'availableAgents'; agents: Array<{ name: string; description: string }>; default: string }
   | { type: 'availableModels'; models: string[]; default: string }
   | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
   | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
@@ -105,6 +108,9 @@ export interface ChatViewDeps {
   /** Available models shown in the chat header dropdown. The first
    * entry is the default for new sessions. */
   getAvailableModels?: () => string[];
+  /** Available agents shown in the chat header dropdown. The first
+   * entry is the default for new sessions. */
+  getAgents?: () => import('../agent/agents').AgentDefinition[];
   /** LRU list of recent sessions (max 5). When omitted, defaults to []. */
   recentSessions?: () => Array<{ id: string; agent: string; title: string }>;
   /** Called when the user closes a tab in the webview (not the server). */
@@ -125,6 +131,10 @@ export class ChatViewProvider implements WebviewViewProvider {
    * first created; the user can switch via the chat header dropdown. */
   private sessionModel: Map<string, string> = new Map();
   private defaultModel: string = 'MiniMax-M3';
+  /** Per-session agent (B.8). The first entry of mavis.agents is
+   * the default for new sessions. */
+  private sessionAgent: Map<string, string> = new Map();
+  private defaultAgentName: string = 'mavis';
 
   constructor(
     private readonly context: ExtensionContext,
@@ -151,6 +161,16 @@ export class ChatViewProvider implements WebviewViewProvider {
     if (!sid) return;
     this.sessionModel.set(sid, model);
     this.postToWebview({ type: 'modelChanged', sessionId: sid, model });
+  }
+
+  /** Update the agent for a specific session (or the current one if
+   * sessionId is omitted). The webview is notified so the dropdown
+   * updates immediately. */
+  setAgent(agent: string, sessionId?: string): void {
+    const sid = sessionId ?? this.currentSession?.id;
+    if (!sid) return;
+    this.sessionAgent.set(sid, agent);
+    this.postToWebview({ type: 'agentChanged', sessionId: sid, agent });
   }
 
   resolveWebviewView(
@@ -341,13 +361,19 @@ export class ChatViewProvider implements WebviewViewProvider {
   setSession(sessionId: string, agent: string): void {
     this.currentSession = { id: sessionId, agent };
     this.postToWebview({ type: 'sessionChanged', session: { id: sessionId, agent } });
-    // Send the available models + per-session model on session change
-    // so the dropdown shows the right value.
+    // Send the available models + agents on session change so the
+    // dropdowns show the right values.
     const models = this.deps.getAvailableModels?.() ?? [this.defaultModel];
     this.postToWebview({
       type: 'availableModels',
       models,
       default: this.sessionModel.get(sessionId) ?? this.defaultModel,
+    });
+    const agents = this.deps.getAgents?.() ?? [{ name: 'mavis', description: 'Default Mavis agent.' }];
+    this.postToWebview({
+      type: 'availableAgents',
+      agents: agents.map((a) => ({ name: a.name, description: a.description ?? '' })),
+      default: this.sessionAgent.get(sessionId) ?? this.defaultAgentName,
     });
     this.broadcastTabs();
   }
@@ -369,6 +395,12 @@ export class ChatViewProvider implements WebviewViewProvider {
             type: 'availableModels',
             models,
             default: this.sessionModel.get(this.currentSession.id) ?? this.defaultModel,
+          });
+          const agents = this.deps.getAgents?.() ?? [{ name: 'mavis', description: 'Default Mavis agent.' }];
+          this.postToWebview({
+            type: 'availableAgents',
+            agents: agents.map((a) => ({ name: a.name, description: a.description ?? '' })),
+            default: this.sessionAgent.get(this.currentSession.id) ?? this.defaultAgentName,
           });
         }
         return;
@@ -396,19 +428,34 @@ export class ChatViewProvider implements WebviewViewProvider {
         // Build the prompt envelope. When tools are enabled, the
         // shim runs the agent loop (B.1+); when tools are disabled
         // the legacy single-shot chat path runs (back-compat).
-        const tools = msg.toolsEnabled !== false ? (this.deps.getTools?.(msg.mode ?? 'builder') ?? null) : null;
-        // Per-session model: the user picks it in the dropdown. If
-        // not set, fall back to the default. currentSession is
-        // already guaranteed non-null above (early return on
-        // !sessionId).
         const sid = this.currentSession!.id;
         const model = this.sessionModel.get(sid) ?? this.defaultModel;
+        // Per-session agent: the user's custom persona (or the
+        // first entry of mavis.agents). The agent's tools list
+        // filters the available tool manifest before passing to
+        // the shim (B.8).
+        const agents = this.deps.getAgents?.() ?? [];
+        const agentName = this.sessionAgent.get(sid) ?? this.defaultAgentName;
+        const agent = agents.find((a) => a.name === agentName) ?? agents[0];
+        const allTools = this.deps.getTools?.(msg.mode ?? 'builder') ?? [];
+        const { agentTools: filteredTools, agentSystemPrompt } = await import('../agent/agents');
+        // Cast allTools to the local ToolDefinition type (the manifest
+        // module exports its own narrower type).
+        const allToolsTyped = allTools as Array<{
+          name: string;
+          description: string;
+          parameters: { type: 'object'; properties: Record<string, { type: string; description: string; enum?: string[]; items?: unknown }>; required?: string[] };
+        }>;
+        const tools = msg.toolsEnabled !== false
+          ? (filteredTools(agent, allToolsTyped) as unknown as Array<{ name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } }>)
+          : null;
         this.currentHandle?.sendPrompt({
           text: msg.text,
           tools: tools ?? undefined,
           mode: msg.mode ?? 'builder',
           contextFiles: msg.contextFiles ?? [],
           model,
+          agent: agent ? { name: agent.name, systemPrompt: agentSystemPrompt(agent) } : undefined,
         });
         return;
       }
@@ -447,6 +494,13 @@ export class ChatViewProvider implements WebviewViewProvider {
         // updates immediately. The shim picks it up via the next
         // prompt envelope's `model` field.
         this.setModel(msg.model, msg.sessionId);
+        return;
+      }
+      case 'setAgent': {
+        // The user picked a new agent in the chat header dropdown.
+        // Store it per-session; the shim picks it up via the next
+        // prompt envelope's `agent` field.
+        this.setAgent(msg.agent, msg.sessionId);
         return;
       }
       case 'copyToClipboard': {

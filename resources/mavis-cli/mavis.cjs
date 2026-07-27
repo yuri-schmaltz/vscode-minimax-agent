@@ -447,6 +447,14 @@ async function cmdSessionStream() {
     const model = typeof prompt.model === 'string' && prompt.model.length > 0
       ? prompt.model
       : (process.env.MAVIS_MODEL || 'MiniMax-M3');
+    // Per-prompt agent override. The host passes the agent's name
+    // and systemPrompt; the shim prepends the systemPrompt to the
+    // default Builder/Plan prompt. We also pass the agent's name
+    // to the system prompt so the model knows which agent persona
+    // it's running as.
+    const agent = (prompt.agent && typeof prompt.agent === 'object')
+      ? prompt.agent
+      : null;
 
     if (MOCK) {
       // Simulate a streaming response: emit one chunk then a "done" per prompt.
@@ -478,6 +486,7 @@ async function cmdSessionStream() {
         mode,
         contextFiles,
         sessionId,
+        agent,
       });
     } else {
       // Real path: OpenAI-compatible /chat/completions. Defaults to
@@ -1143,7 +1152,13 @@ function openaiToolSchema(tools) {
 // Build the system prompt for an agent run. Mode controls whether
 // the model is allowed to (claim to) write files; agent.md (if
 // present) gives the model project-specific context.
-function buildSystemPrompt(mode, agentMd) {
+function buildSystemPrompt(mode, agentMd, agent) {
+  // agent (optional): { name, systemPrompt }. The agent's systemPrompt
+  // is prepended to the default Builder/Plan prompt so the user can
+  // define a custom persona ("you're a strict code reviewer", etc.).
+  const agentBlock = (agent && typeof agent.systemPrompt === 'string' && agent.systemPrompt.length > 0)
+    ? `\n\n# Agent: ${agent.name || 'custom'}\n${agent.systemPrompt}\n`
+    : '';
   const modeBlock = mode === 'plan'
     ? `MODE: PLAN (read-only).
 You CANNOT write, edit, or run commands. Do NOT attempt to call tools like write_file, edit_file, or bash — they are not available in this mode.
@@ -1151,10 +1166,12 @@ When the user asks for changes, explain what would be needed and tell them to sw
     : `MODE: BUILDER.
 You have read tools (read_file, glob, grep, list_directory) and write tools (write_file, edit_file). Use read tools to investigate the codebase before changing anything.
 When you write or edit a file, the user will see a color-coded diff and can revert your change. Be precise and explain your changes in plain language. Cite file paths and line numbers when you reference code.`;
-  const agentBlock = agentMd
-    ? `\n\nPROJECT INSTRUCTIONS (from agent.md):\n${agentMd}\n`
-    : '';
-  return `You are Mavis, a coding assistant for VS Code.\n${modeBlock}${agentBlock}`;
+  // agent.md is the per-project file. The agent's own system
+  // prompt is the user's persona override. Both are optional; we
+  // concatenate whichever is present, in the order: agent persona
+  // → mode → agent.md.
+  const mdBlock = agentMd ? `\n\nPROJECT INSTRUCTIONS (from agent.md):\n${agentMd}\n` : '';
+  return `You are Mavis, a coding assistant for VS Code.\n${modeBlock}${agentBlock}${mdBlock}`;
 }
 
 // Read agent.md from the workspace root, if present. Caps at 16 KB
@@ -1205,11 +1222,11 @@ function loadContextFiles(paths) {
 // hit the iteration cap. Non-streaming model calls only (tool_calls
 // in deltas need careful accumulator logic that's deferred to a
 // later phase; non-streaming is good enough for B.1).
-async function runAgentLoop({ text, tools, mode, contextFiles, sessionId }) {
+async function runAgentLoop({ text, tools, mode, contextFiles, sessionId, agent }) {
   const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
   const openaiTools = openaiToolSchema(tools);
   const agentMd = loadAgentMd();
-  const systemPrompt = buildSystemPrompt(mode, agentMd);
+  const systemPrompt = buildSystemPrompt(mode, agentMd, agent);
   const contextBlock = loadContextFiles(contextFiles);
 
   const messages = [{ role: 'system', content: systemPrompt }];
