@@ -59,15 +59,42 @@ echo "Mavis: usando binário: $CODE_BIN"
 # --force so the install overwrites the previous version.
 echo "Mavis: instalando ${VSIX_PATH}..."
 
-# Run `code` in a subshell so the trap doesn't delete the .vsix while
-# code is still reading it. The `--` tells code to treat the rest as
-# positional, and we pass the .vsix as the LAST arg so a wrapper that
-# stops on first empty value still gets the path.
-(cd "$TMP_DIR" && NODE_OPTIONS=--no-deprecation "$CODE_BIN" --install-extension --force "$VSIX_NAME")
+# Capture both stdout and stderr so we can detect the 'Ignoring the
+# option' warning that some wrapped `code` binaries print while
+# silently dropping the .vsix path. The wrapper returns 0 in that
+# case, so we have to detect the warning in the output.
+INSTALL_OUTPUT="$(
+  cd "$TMP_DIR" && NODE_OPTIONS=--no-deprecation "$CODE_BIN" --install-extension --force "$VSIX_NAME" 2>&1
+)"
 INSTALL_RC=$?
+echo "$INSTALL_OUTPUT"
 
 if [ $INSTALL_RC -ne 0 ]; then
   echo "Mavis: instalação falhou (código de saída $INSTALL_RC)." >&2
   exit $INSTALL_RC
+fi
+if echo "$INSTALL_OUTPUT" | grep -q "Ignoring the option\|requires a non empty value"; then
+  echo "Mavis: 'code' CLI rejeitou a instalação (Ignoring the option). Tentando sem --force..." >&2
+  INSTALL_OUTPUT2="$(
+    cd "$TMP_DIR" && NODE_OPTIONS=--no-deprecation "$CODE_BIN" --install-extension "$VSIX_NAME" 2>&1
+  )"
+  INSTALL_RC2=$?
+  echo "$INSTALL_OUTPUT2"
+  if [ $INSTALL_RC2 -ne 0 ] || echo "$INSTALL_OUTPUT2" | grep -q "Ignoring the option\|requires a non empty value"; then
+    echo "Mavis: 'code' continua rejeitando. Tentando com path absoluto e --no-sandbox..." >&2
+    INSTALL_OUTPUT3="$(
+      cd "$TMP_DIR" && NODE_OPTIONS=--no-deprecation "$CODE_BIN" --no-sandbox --install-extension "$VSIX_PATH" 2>&1
+    )"
+    INSTALL_RC3=$?
+    echo "$INSTALL_OUTPUT3"
+    if echo "$INSTALL_OUTPUT3" | grep -q "Ignoring the option\|requires a non empty value"; then
+      echo "Mavis: o binário 'code' em $CODE_BIN não aceita argumentos via CLI." >&2
+      echo "Mavis: provavelmente é um wrapper (ex: code-insiders, vscodium, ou um script custom)." >&2
+      echo "Mavis: workarounds:" >&2
+      echo "Mavis:   1. VSCode GUI → Extensions → '...' menu → 'Install from VSIX' → escolha $VSIX_PATH" >&2
+      echo "Mavis:   2. Ou ajuste o CODE_BIN no topo deste script (ex: /usr/bin/code-insiders)" >&2
+      exit 1
+    fi
+  fi
 fi
 echo "Mavis: $TAG instalado. Reinicia o VSCode pra carregar."
