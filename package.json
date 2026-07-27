@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -341,6 +341,23 @@
             "npx"
           ],
           "markdownDescription": "Allowlist of command prefixes (first whitespace-separated token) that the `bash` tool will run without prompting. Commands not in the list are still run but reported as `allowed: false` so the chat can warn. DANGEROUS patterns (rm -rf /, sudo, eval, curl|sh, fork bombs) are always rejected."
+        },
+        "mavis.models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "MiniMax-M3",
+            "MiniMax-M2.7",
+            "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5",
+            "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1",
+            "MiniMax-M2.1-highspeed",
+            "MiniMax-M2"
+          ],
+          "markdownDescription": "List of models shown in the chat header's model dropdown. The first entry is the default for new sessions."
         },
         "mavis.model": {
           "type": "string",

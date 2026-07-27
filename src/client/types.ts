@@ -58,6 +58,8 @@ export interface PromptMessage {
   /** Files mentioned via @filename. Their contents are injected as
    * a system message so the model has the file context. */
   contextFiles?: string[];
+  /** Per-prompt model override. Defaults to MAVIS_MODEL env var. */
+  model?: string;
 }
 
 /** What the consumer (webview) receives. */
@@ -70,7 +72,7 @@ export interface AssistantMessage {
 
 /** Handle returned from `streamSession`. */
 export interface StreamHandle {
-  sendPrompt(envelope: { text: string; tools?: PromptMessage['tools']; mode?: PromptMessage['mode']; contextFiles?: PromptMessage['contextFiles'] } | string): void;
+  sendPrompt(envelope: { text: string; tools?: PromptMessage['tools']; mode?: PromptMessage['mode']; contextFiles?: PromptMessage['contextFiles']; model?: PromptMessage['model'] } | string): void;
   close(): void;
   on(event: ClientEvent, listener: (e: StreamEvent) => void): () => void;
   off(event: ClientEvent, listener: (e: StreamEvent) => void): void;

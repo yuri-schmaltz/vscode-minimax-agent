@@ -24,7 +24,7 @@ interface ChatMessage {
 type WebviewToHost =
   | { type: 'ready' }
   | { type: 'newSession'; agent?: string }
-  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; toolsEnabled?: boolean; contextFiles?: string[] }
+  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; toolsEnabled?: boolean; contextFiles?: string[]; model?: string }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'copyToClipboard'; text: string }
@@ -42,6 +42,8 @@ type HostToWebview =
   | { type: 'reasoning'; content: string; sessionId: string; ts: number }
   | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
   | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
+  | { type: 'modelChanged'; sessionId: string; model: string }
+  | { type: 'availableModels'; models: string[]; default: string }
   | { type: 'error'; message: string }
   | {
       type: 'history';
@@ -83,6 +85,8 @@ export function App(): JSX.Element {
   const [tools, setTools] = useState<Array<{ id: string; name: string; args: unknown; result?: unknown; status: 'running' | 'done' | 'error' }>>([]);
   const [reasoning, setReasoning] = useState<string | null>(null);
   const [mode, setMode] = useState<'builder' | 'plan'>('builder');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [currentModel, setCurrentModel] = useState<string>('');
   const [contextFiles] = useState<string[]>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -145,6 +149,13 @@ export function App(): JSX.Element {
             ...prev,
             { id: msg.id, name: msg.name, args: msg.args, status: 'running' },
           ]);
+          break;
+        case 'availableModels':
+          setAvailableModels(msg.models);
+          if (msg.default) setCurrentModel(msg.default);
+          break;
+        case 'modelChanged':
+          setCurrentModel(msg.model);
           break;
         case 'toolResult':
           setTools((prev) =>
@@ -227,6 +238,7 @@ export function App(): JSX.Element {
       text,
       mode,
       toolsEnabled: true,
+      model: currentModel || undefined,
       // B.1: chips for @-mentions are not yet wired in the webview
       // (autocomplete is B.5). The host will accept contextFiles and
       // forward them to the shim when present.
@@ -235,7 +247,7 @@ export function App(): JSX.Element {
     setDraft('');
     setTools([]);
     setReasoning(null);
-  }, [draft, session, mode, contextFiles]);
+  }, [draft, session, mode, contextFiles, currentModel]);
 
   const toggleMode = useCallback(() => {
     setMode((m) => (m === 'builder' ? 'plan' : 'builder'));
@@ -293,6 +305,18 @@ export function App(): JSX.Element {
           </button>
         </div>
         <div className="mavis-header-right">
+          <select
+            className="mavis-model-select"
+            value={currentModel}
+            onChange={(e) => postToHost({ type: 'setModel', model: e.target.value, sessionId: session?.id })}
+            title="Model used for this session"
+            disabled={!session || availableModels.length === 0}
+          >
+            {availableModels.length === 0 && <option value="">loading…</option>}
+            {availableModels.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
           <button
             type="button"
             className={'mavis-mode-toggle' + (mode === 'plan' ? ' mavis-mode-plan' : '')}

@@ -478,3 +478,24 @@ body,
   --mavis-user-bg: rgba(250, 189, 47, 0.08);
   --mavis-system-fg: #928374;
 }
+
+/* B.5 — Model dropdown in the chat header. */
+.mavis-model-select {
+  background: var(--vscode-dropdown-background, var(--mavis-input-bg));
+  color: var(--vscode-dropdown-foreground, var(--mavis-fg));
+  border: 1px solid var(--vscode-dropdown-border, var(--mavis-border));
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  cursor: pointer;
+  margin-right: 6px;
+  max-width: 220px;
+}
+.mavis-model-select:hover {
+  border-color: var(--vscode-focusBorder, var(--mavis-accent));
+}
+.mavis-model-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -6,6 +6,34 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-07-26 (B.5 polish: model dropdown no header do chat)
+
+### Added
+- **Model dropdown in the chat header** (B.5). The list comes from
+  the new `mavis.models` setting (default: all 8 MiniMax models:
+  M3, M2.7, M2.7-highspeed, M2.5, M2.5-highspeed, M2.1,
+  M2.1-highspeed, M2). The first entry is the default for new
+  sessions. Existing `mavis.model` setting is still respected as
+  a fallback.
+- **Per-session model**: each session remembers the model the
+  user picked. Switching models in one tab doesn't affect other
+  tabs. New sessions inherit the default (first entry of
+  `mavis.models`).
+- **No re-spawn needed**: the model is passed per-prompt in the
+  sendPrompt envelope, so switching is instant. The shim's
+  single-shot and agent-loop paths both prefer
+  `prompt.model` over the `MAVIS_MODEL` env var.
+- 2 new tests: `agentLoop.test.cjs` end-to-end with a fake archon
+  that asserts the per-prompt model is forwarded to
+  `/v1/chat/completions`; the other 354 tests still pass.
+
+### Migration
+- The legacy `mavis.model` setting continues to work as a
+  fallback when `mavis.models` is empty.
+- Existing sessions pick up the default model; the user can
+  switch via the dropdown in the chat header.
+
+## [0.7.1] — 2026-07-26 (remove post-activation popup)
 ## [0.7.0] — 2026-07-26 (Fase B.4: quota widget + 3 themes + @-mention support)
 
 ### Added

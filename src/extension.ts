@@ -73,7 +73,11 @@ export function activate(context: ExtensionContext): void {
   // override it from settings if they self-host the archon-server.
   const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
   const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
-  const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
+  // Default model: the first entry of mavis.models, falling
+  // back to the legacy mavis.model setting, then 'MiniMax-M3'.
+  const modelsList = config.get<string[]>('models', []);
+  const legacyModel = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
+  const model = modelsList.length > 0 ? modelsList[0] : legacyModel;
   const stream = config.get<boolean>('stream', false);
   const defaultAgent = config.get<string>('defaultAgent', 'mavis') || 'mavis';
   const oauthFlowRaw = config.get<string>('oauthFlow', 'auto');
@@ -203,6 +207,7 @@ export function activate(context: ExtensionContext): void {
     onOpenSettings: () => commands.executeCommand('workbench.action.openSettings', 'mavis'),
     onLog: (line) => mavisOutput?.appendLine(`[mavis:chat] ${line}`),
     getTools: (mode) => getToolManifest(mode),
+    getAvailableModels: () => config.get<string[]>('models', []),
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
     onNewSession: (id: string, agent: string) => {
@@ -453,7 +458,11 @@ export function activate(context: ExtensionContext): void {
       }
       const archonUrl = (config.get<string>('archonUrl', '').trim() || 'https://api.minimax.io');
       const apiBase = config.get<string>('apiBase', '/v1').trim() || '/v1';
-      const model = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
+      // Default model: the first entry of mavis.models, falling
+  // back to the legacy mavis.model setting, then 'MiniMax-M3'.
+  const modelsList = config.get<string[]>('models', []);
+  const legacyModel = config.get<string>('model', 'MiniMax-M3').trim() || 'MiniMax-M3';
+  const model = modelsList.length > 0 ? modelsList[0] : legacyModel;
       const output = mavisOutput ?? window.createOutputChannel('Mavis');
       output.clear();
       output.appendLine(`[mavis] === Diagnóstico de conexão Mavis ===`);

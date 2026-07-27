@@ -33,12 +33,13 @@ import { StreamEvent } from '../client/types';
 export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'newSession'; agent?: string }
-  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; contextFiles?: string[]; toolsEnabled?: boolean }
+  | { type: 'sendPrompt'; sessionId: string; text: string; mode?: 'builder' | 'plan'; contextFiles?: string[]; toolsEnabled?: boolean; model?: string }
   | { type: 'loadHistory'; sessionId: string }
   | { type: 'openSettings' }
   | { type: 'requestSetApiKey' }
   | { type: 'testConnection' }
   | { type: 'openOutput' }
+  | { type: 'setModel'; model: string; sessionId?: string }
   | { type: 'copyToClipboard'; text: string }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'closeTab'; sessionId: string }
@@ -71,6 +72,8 @@ export type HostToWebview =
   | { type: 'userMessage'; msg: { id: string; text: string; ts: number } }
   | { type: 'assistantMessage'; delta: { text: string; sessionId: string; ts: number; done?: boolean } }
   | { type: 'reasoning'; content: string; sessionId: string; ts: number }
+  | { type: 'modelChanged'; sessionId: string; model: string }
+  | { type: 'availableModels'; models: string[]; default: string }
   | { type: 'toolCall'; id: string; name: string; args: unknown; sessionId: string; ts: number }
   | { type: 'toolResult'; id: string; name: string; result: unknown; sessionId: string; ts: number }
   | { type: 'error'; message: string }
@@ -99,6 +102,9 @@ export interface ChatViewDeps {
     description: string;
     parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
   }> | null;
+  /** Available models shown in the chat header dropdown. The first
+   * entry is the default for new sessions. */
+  getAvailableModels?: () => string[];
   /** LRU list of recent sessions (max 5). When omitted, defaults to []. */
   recentSessions?: () => Array<{ id: string; agent: string; title: string }>;
   /** Called when the user closes a tab in the webview (not the server). */
@@ -115,18 +121,36 @@ export class ChatViewProvider implements WebviewViewProvider {
   private currentSession: { id: string; agent: string } | undefined;
   private boundSessionListener = false;
   private attachments: Attachment[] = [];
+  /** Per-session model. Sessions inherit the global default when
+   * first created; the user can switch via the chat header dropdown. */
+  private sessionModel: Map<string, string> = new Map();
+  private defaultModel: string = 'MiniMax-M3';
 
   constructor(
     private readonly context: ExtensionContext,
     private readonly deps: ChatViewDeps,
   ) {
     this.themeName = 'default';
+    // Default model: first entry of the available-models list, or
+    // 'MiniMax-M3' if the list is empty.
+    const list = this.deps.getAvailableModels?.() ?? [];
+    if (list.length > 0) this.defaultModel = list[0];
   }
   private themeName: string;
 
   setTheme(theme: string): void {
     this.themeName = theme || 'default';
     if (this.view) this.view.webview.html = this.renderHtml(this.view.webview);
+  }
+
+  /** Update the model for a specific session (or the current one if
+   * sessionId is omitted). The webview is notified so the dropdown
+   * updates immediately. */
+  setModel(model: string, sessionId?: string): void {
+    const sid = sessionId ?? this.currentSession?.id;
+    if (!sid) return;
+    this.sessionModel.set(sid, model);
+    this.postToWebview({ type: 'modelChanged', sessionId: sid, model });
   }
 
   resolveWebviewView(
@@ -317,6 +341,14 @@ export class ChatViewProvider implements WebviewViewProvider {
   setSession(sessionId: string, agent: string): void {
     this.currentSession = { id: sessionId, agent };
     this.postToWebview({ type: 'sessionChanged', session: { id: sessionId, agent } });
+    // Send the available models + per-session model on session change
+    // so the dropdown shows the right value.
+    const models = this.deps.getAvailableModels?.() ?? [this.defaultModel];
+    this.postToWebview({
+      type: 'availableModels',
+      models,
+      default: this.sessionModel.get(sessionId) ?? this.defaultModel,
+    });
     this.broadcastTabs();
   }
 
@@ -331,6 +363,12 @@ export class ChatViewProvider implements WebviewViewProvider {
           this.postToWebview({
             type: 'sessionChanged',
             session: { id: this.currentSession.id, agent: this.currentSession.agent },
+          });
+          const models = this.deps.getAvailableModels?.() ?? [this.defaultModel];
+          this.postToWebview({
+            type: 'availableModels',
+            models,
+            default: this.sessionModel.get(this.currentSession.id) ?? this.defaultModel,
           });
         }
         return;
@@ -359,11 +397,18 @@ export class ChatViewProvider implements WebviewViewProvider {
         // shim runs the agent loop (B.1+); when tools are disabled
         // the legacy single-shot chat path runs (back-compat).
         const tools = msg.toolsEnabled !== false ? (this.deps.getTools?.(msg.mode ?? 'builder') ?? null) : null;
+        // Per-session model: the user picks it in the dropdown. If
+        // not set, fall back to the default. currentSession is
+        // already guaranteed non-null above (early return on
+        // !sessionId).
+        const sid = this.currentSession!.id;
+        const model = this.sessionModel.get(sid) ?? this.defaultModel;
         this.currentHandle?.sendPrompt({
           text: msg.text,
           tools: tools ?? undefined,
           mode: msg.mode ?? 'builder',
           contextFiles: msg.contextFiles ?? [],
+          model,
         });
         return;
       }
@@ -394,6 +439,14 @@ export class ChatViewProvider implements WebviewViewProvider {
         // Surface the Mavis output channel so the user can see the
         // shim stderr + diagnostic trail.
         void commands.executeCommand('mavis.openOutput');
+        return;
+      }
+      case 'setModel': {
+        // The user picked a new model in the chat header dropdown.
+        // Store it per-session and echo it back so the webview
+        // updates immediately. The shim picks it up via the next
+        // prompt envelope's `model` field.
+        this.setModel(msg.model, msg.sessionId);
         return;
       }
       case 'copyToClipboard': {

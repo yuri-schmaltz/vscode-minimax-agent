@@ -309,3 +309,78 @@ test('agent loop: bash tool is invoked, output fed back to model', async () => {
     server.close();
   }
 });
+
+test('agent loop: per-prompt model is forwarded to /v1/chat/completions', async () => {
+  // Verify that the model field in the prompt envelope is sent to
+  // the API as `model: <value>` in the request body.
+  let receivedModel = null;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => body += c);
+    req.on('end', () => {
+      try {
+        const reqJson = JSON.parse(body);
+        receivedModel = reqJson.model;
+      } catch { /* ignore */ }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'chat', model: 'test', created: 0,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }));
+    });
+  });
+  const port = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'mavis-model-'));
+  try {
+    const child = spawn(
+      process.execPath,
+      [SHIM, 'session', 'stream', '--session-id', 'sess_model_test'],
+      {
+        env: {
+          ...process.env,
+          MAVIS_ARCHON_URL: `http://127.0.0.1:${port}`,
+          MAVIS_API_KEY: 'sk-test',
+          MAVIS_API_BASE: '/v1',
+          MAVIS_WORKSPACE: workdir,
+          // Set a different env default to verify the envelope
+          // model takes precedence.
+          MAVIS_MODEL: 'MiniMax-M2.7',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    const parser = new LineParser();
+    child.stdout.pipe(parser);
+    await new Promise((resolve, reject) => {
+      const onEvt = setInterval(() => {
+        if (parser.events.some((e) => e.type === 'ready')) { clearInterval(onEvt); resolve(); }
+      }, 10);
+      setTimeout(() => { clearInterval(onEvt); reject(new Error('timeout waiting for ready')); }, 3000);
+    });
+    child.stdin.write(JSON.stringify({
+      type: 'prompt',
+      text: 'hello',
+      model: 'MiniMax-M2.5-highspeed',
+    }) + '\n');
+    await new Promise((resolve, reject) => {
+      const onDone = setInterval(() => {
+        if (parser.events.some((e) => e.type === 'done')) { clearInterval(onDone); resolve(); }
+      }, 10);
+      setTimeout(() => { clearInterval(onDone); reject(new Error('timeout waiting for done. events=' + JSON.stringify(parser.events))); }, 5000);
+    });
+    child.stdin.end();
+    await new Promise((r) => setTimeout(r, 100));
+    child.kill();
+    server.close();
+    assert.equal(receivedModel, 'MiniMax-M2.5-highspeed', `expected MiniMax-M2.5-highspeed, got ${receivedModel}`);
+  } finally {
+    fs.rmSync(workdir, { recursive: true });
+  }
+});

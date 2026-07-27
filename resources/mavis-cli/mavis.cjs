@@ -440,6 +440,13 @@ async function cmdSessionStream() {
     const useAgent = toolList && toolList.length > 0;
     const mode = typeof prompt.mode === 'string' ? prompt.mode : 'builder';
     const contextFiles = Array.isArray(prompt.contextFiles) ? prompt.contextFiles : [];
+    // Per-prompt model override. The env var MAVIS_MODEL is the
+    // fallback for callers that don't pass a model in the envelope
+    // (back-compat: the original single-shot chat path didn't know
+    // about models; it just used the env var).
+    const model = typeof prompt.model === 'string' && prompt.model.length > 0
+      ? prompt.model
+      : (process.env.MAVIS_MODEL || 'MiniMax-M3');
 
     if (MOCK) {
       // Simulate a streaming response: emit one chunk then a "done" per prompt.
@@ -478,7 +485,11 @@ async function cmdSessionStream() {
       // in a few edge cases (mixing `delta.content` and `delta.reasoning_content`,
       // multi-byte chunks split across reads, etc). When the parser is
       // robust, flip the env back to '1' to get the typing effect.
-      const model = process.env.MAVIS_MODEL || 'MiniMax-M3';
+      // Use the per-prompt model if provided, otherwise fall back
+      // to the env var (single-shot chat legacy path).
+      const model = typeof prompt.model === 'string' && prompt.model.length > 0
+        ? prompt.model
+        : (process.env.MAVIS_MODEL || 'MiniMax-M3');
       const useStream = process.env.MAVIS_STREAM === '1';
       logErr(`chat request -> ${archonUrl('/chat/completions')} model=${model} stream=${useStream}`);
       let res;
