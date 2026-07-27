@@ -77,6 +77,37 @@ function shortSessionId(id: string | null | undefined): string {
   return id.length <= 8 ? id : id.slice(0, 8);
 }
 
+// B.9 (diagnostic) — Error boundary that surfaces React render
+// errors to the user instead of leaving the webview in a
+// perpetual 'loading' state. Shows the error message and a
+// 'Reload Webview' button.
+class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error('Mavis webview error:', error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="mavis-error" role="alert" style={{ padding: 16 }}>
+          <div className="mavis-error-body">
+            ⚠ Mavis webview crashed: {this.state.error.message}
+          </div>
+          <button
+            className="mavis-error-action"
+            onClick={() => location.reload()}
+          >
+            Reload Webview
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App(): JSX.Element {
   const [session, setSession] = useState<{ id: string; agent: string } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);

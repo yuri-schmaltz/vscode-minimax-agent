@@ -29,6 +29,7 @@ import { EventEmitter } from 'node:events';
 import { MavisClient } from '../client/MavisClient';
 import { StreamHandle } from '../client/types';
 import { StreamEvent } from '../client/types';
+import { agentTools, agentSystemPrompt } from '../agent/agents';
 
 export type WebviewToHost =
   | { type: 'ready' }
@@ -438,7 +439,6 @@ export class ChatViewProvider implements WebviewViewProvider {
         const agentName = this.sessionAgent.get(sid) ?? this.defaultAgentName;
         const agent = agents.find((a) => a.name === agentName) ?? agents[0];
         const allTools = this.deps.getTools?.(msg.mode ?? 'builder') ?? [];
-        const { agentTools: filteredTools, agentSystemPrompt } = await import('../agent/agents');
         // Cast allTools to the local ToolDefinition type (the manifest
         // module exports its own narrower type).
         const allToolsTyped = allTools as Array<{
@@ -447,7 +447,7 @@ export class ChatViewProvider implements WebviewViewProvider {
           parameters: { type: 'object'; properties: Record<string, { type: string; description: string; enum?: string[]; items?: unknown }>; required?: string[] };
         }>;
         const tools = msg.toolsEnabled !== false
-          ? (filteredTools(agent, allToolsTyped) as unknown as Array<{ name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } }>)
+          ? (agentTools(agent, allToolsTyped) as unknown as Array<{ name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } }>)
           : null;
         this.currentHandle?.sendPrompt({
           text: msg.text,
