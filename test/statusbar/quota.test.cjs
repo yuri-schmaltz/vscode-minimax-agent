@@ -6,7 +6,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { startQuotaPoller } = require('../../out/statusbar/quota.js');
+// Load the quota poller via tsx (registered globally for *.ts
+// files in the test runner). The test runner uses --import tsx
+// for TS, so we can just `require` the .ts file directly.
+require('tsx/cjs');
+const { startQuotaPoller } = require('../../src/statusbar/quota.ts');
 
 function makeFakeClient(key) {
   return { getApiKey: () => key };

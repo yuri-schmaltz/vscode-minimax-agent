@@ -869,7 +869,13 @@ export function activate(context: ExtensionContext): void {
     void context.globalState.update('mavis.welcomed', true);
     void commands.executeCommand('mavis.welcome');
   } else {
-    window.showInformationMessage(i18n('extension.ready', initialLocale));
+    // B.4 user request: the post-activation "ready" popup was too
+    // noisy. Welcome flow already runs on first activation; the
+    // every-activation toast added no value and blocked input.
+    // The status bar item ("Mavis: <agent> | <session>") is the
+    // persistent signal that the extension is loaded. Leaving the
+    // toast in place only for first-time users (handled above).
+    void 0; // intentional no-op
   }
 }
 
