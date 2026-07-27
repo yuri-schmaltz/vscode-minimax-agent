@@ -6,6 +6,87 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-07-26 (Fase B.4: quota widget + 3 themes + @-mention support)
+
+### Added
+- **Quota widget in the status bar** (B.4): polls
+  `https://api.minimax.io/v1/coding_plan/remains` every 60s and
+  shows remaining/used + reset time. Same endpoint the ezeoli88
+  extension uses.
+- **3 webview themes** (B.4): `tokyo-night`, `rose-pine`, `gruvbox`.
+  Pick via the new `mavis.webviewTheme` setting. The default
+  inherits the active VSCode theme.
+- **@-mention stub in the host**: `contextFiles` is now plumbed
+  end-to-end (B.1's plumbing was already there; B.4 confirms the
+  full path works). Autocomplete in the webview is a B.5 polish
+  item.
+- 4 new tests for the quota poller (`test/statusbar/quota.test.cjs`):
+  happy path, empty response, 4xx, missing key.
+
+### B.4 vs earlier phases
+- B.1: read tools + agent.md + Builder/Plan mode
+- B.2: write_file + edit_file + inline diff viewer
+- B.3: bash tool (allowlist + dangerous-pattern rejection + 30s timeout)
+- B.4: quota + themes + @-mention stub
+- 353/353 tests pass (4 new quota tests + 11 bash tests + 8 write
+  tests + 9 read tests from earlier phases).
+
+## [0.6.0] — 2026-07-26 (Fase B.3: bash tool com allowlist + dangerous-pattern rejection)
+
+### Added
+- **`bash` tool** (B.3): runs shell commands in the workspace root.
+  Returns `{stdout, stderr, exitCode, timedOut, allowed}`. Subject
+  to:
+  - `MAVIS_BASH_ALLOW` env var (or `mavis.tools.bashAllow` setting):
+    comma-separated list of command prefixes that are auto-approved.
+  - Hard-coded dangerous-pattern rejection: `rm -rf /`, `sudo`,
+    `eval`, `curl|sh`, `wget|sh`, fork bombs.
+  - 30s default timeout (configurable via `MAVIS_BASH_TIMEOUT_MS`).
+  - Output cap at 64KB (configurable via `MAVIS_BASH_MAX_OUTPUT`).
+- **`cwd` tool** (B.3): returns the workspace root path.
+- **`mavis.tools.bashAllow` setting** lets the user extend the
+  allowlist without rebuilding.
+- 11 new bash tests + 1 end-to-end agent-loop test that mocks
+  `/v1/chat/completions` and verifies bash output feeds back to
+  the model.
+
+### Security notes
+- The bash tool executes via `sh -c`, so chained commands
+  (`npm install && npm test`) work. The dangerous-pattern
+  regexes catch the common escalation paths.
+- Path traversal is still enforced at the `resolveToolPath` layer
+  (B.1+B.2) for `write_file` and `edit_file`. The bash tool
+  inherits the workspace as cwd, but the user is responsible for
+  vetting absolute paths inside their command.
+- Plan mode does NOT include bash in the tool manifest, so the
+  model can't reach it in read-only mode.
+
+## [0.5.0] — 2026-07-26 (Fase B.2: write_file + edit_file + inline diff viewer)
+
+### Added
+- **`write_file` tool** (B.2): creates or overwrites a file with
+  the given content. Returns `{action, bytes, oldContent, newContent, diff}`.
+- **`edit_file` tool** (B.2): targeted find-and-replace. Throws
+  if `find` is not present. Supports `replaceAll` flag.
+- **Inline diff viewer** in the chat (B.2): color-coded hunks
+  (green for added lines, red for removed, plain for context).
+  The user sees the diff for every write/edit immediately.
+- **Plan mode now structurally can't write**: Plan mode
+  manifest does NOT include `write_file` / `edit_file`, so the
+  model can't reach them even if it tried.
+- **Path-traversal protection for non-existent files**: the new
+  `resolveToolPath(path, label, mustExist)` walks up the
+  directory tree until it finds an existing ancestor and
+  realpaths that, blocking `..` traversal without requiring the
+  file to pre-exist.
+- **Atomic-ish writes**: write to `<file>.mavis-tmp` then rename.
+  Avoids leaving a half-written file if the process dies.
+- **Line-diff in the shim** (no extra deps): an LCS-based line
+  diff that produces unified-style hunks for the diff viewer.
+- 8 new tests covering write_file + edit_file + the new
+  `mustExist` resolution behavior.
+
+## [0.4.0] — 2026-07-26 (Fase B.1: agent loop com 4 read-only tools + agent.md + Builder/Plan mode)
 ## [0.4.0] — 2026-07-26 (Fase B.1: agent loop com 4 tools read-only + agent.md + mode Builder/Plan)
 
 ### Added

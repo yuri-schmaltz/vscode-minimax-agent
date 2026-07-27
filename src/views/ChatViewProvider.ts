@@ -91,9 +91,10 @@ export interface ChatViewDeps {
   /** Default agent for new sessions. */
   defaultAgent: string;
   /** Returns the tool manifest for the agent run. If null, no tools
-   * are sent (legacy single-shot chat). B.1+ uses a read-only
-   * manifest; B.2+ adds write tools behind a confirmation flow. */
-  getTools?: () => Array<{
+   * are sent (legacy single-shot chat). The mode parameter
+   * (builder/plan) controls which tools are included. B.1+
+   * read-only; B.2+ adds write_file + edit_file in builder mode. */
+  getTools?: (mode: 'builder' | 'plan') => Array<{
     name: string;
     description: string;
     parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
@@ -118,7 +119,15 @@ export class ChatViewProvider implements WebviewViewProvider {
   constructor(
     private readonly context: ExtensionContext,
     private readonly deps: ChatViewDeps,
-  ) {}
+  ) {
+    this.themeName = 'default';
+  }
+  private themeName: string;
+
+  setTheme(theme: string): void {
+    this.themeName = theme || 'default';
+    if (this.view) this.view.webview.html = this.renderHtml(this.view.webview);
+  }
 
   resolveWebviewView(
     webviewView: WebviewView,
@@ -349,7 +358,7 @@ export class ChatViewProvider implements WebviewViewProvider {
         // Build the prompt envelope. When tools are enabled, the
         // shim runs the agent loop (B.1+); when tools are disabled
         // the legacy single-shot chat path runs (back-compat).
-        const tools = msg.toolsEnabled !== false ? (this.deps.getTools?.() ?? null) : null;
+        const tools = msg.toolsEnabled !== false ? (this.deps.getTools?.(msg.mode ?? 'builder') ?? null) : null;
         this.currentHandle?.sendPrompt({
           text: msg.text,
           tools: tools ?? undefined,
@@ -544,7 +553,7 @@ export class ChatViewProvider implements WebviewViewProvider {
   <link rel="stylesheet" href="${stylesUri}" />
   <title>Mavis</title>
 </head>
-<body>
+<body class="mavis-theme-${this.themeName}">
   <div id="root"></div>
   <script src="${scriptUri}"></script>
 </body>

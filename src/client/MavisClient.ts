@@ -80,6 +80,8 @@ export interface MavisClientOptions {
   onStderr?: (text: string) => void;
   /** Workspace root (used by tool sandboxing + agent.md lookup). */
   workspace?: string;
+  /** Allowlist of bash command prefixes (B.3). Passed as MAVIS_BASH_ALLOW. */
+  bashAllow?: string[];
   /** Force mock mode (sets MAVIS_MOCK=1 in env). Defaults to true when archonUrl is empty. */
   mock?: boolean;
   /** Override child_process.spawn (for tests). */
@@ -100,7 +102,7 @@ interface RunningStream {
 }
 
 export class MavisClient {
-  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream' | 'onStderr' | 'workspace'>> & {
+  private readonly options: Required<Omit<MavisClientOptions, 'extensionPath' | 'globalStoragePath' | 'archonUrl' | 'cliPath' | 'defaultAgent' | 'apiKey' | 'apiBase' | 'model' | 'stream' | 'onStderr' | 'workspace' | 'bashAllow'>> & {
     cliPath: string | undefined;
     archonUrl: string | undefined;
     defaultAgent: string | undefined;
@@ -112,6 +114,7 @@ export class MavisClient {
     stream: boolean;
     onStderr?: (text: string) => void;
     workspace?: string;
+    bashAllow?: string[];
   };
   private readonly spawnImpl: typeof spawn;
   private readonly streams = new Set<RunningStream>();
@@ -836,6 +839,9 @@ export class MavisClient {
     }
     if (this.options.workspace) {
       env.MAVIS_WORKSPACE = this.options.workspace;
+    }
+    if (this.options.bashAllow && this.options.bashAllow.length > 0) {
+      env.MAVIS_BASH_ALLOW = this.options.bashAllow.join(',');
     }
     return {
       env,

@@ -404,9 +404,7 @@ export function App(): JSX.Element {
                 </span>
                 <code className="mavis-tool-args">{JSON.stringify(t.args)}</code>
                 {t.result !== undefined && (
-                  <pre className="mavis-tool-result">
-                    {typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2).slice(0, 800)}
-                  </pre>
+                  <ToolResult name={t.name} result={t.result} />
                 )}
               </li>
             ))}
@@ -450,5 +448,48 @@ function Message({ message }: { message: ChatMessage }): JSX.Element {
         )}
       </div>
     </div>
+  );
+}
+
+// B.2 — Render the result of a tool call. For write_file / edit_file
+// we render a color-coded diff so the user can review the change.
+// For other tools we render a truncated JSON dump.
+function ToolResult({ name, result }: { name: string; result: unknown }): JSX.Element {
+  if (!result || typeof result !== 'object') {
+    return <pre className="mavis-tool-result">{String(result)}</pre>;
+  }
+  const r = result as Record<string, unknown>;
+  // Write tools: render a diff.
+  if ((name === 'write_file' || name === 'edit_file') && Array.isArray(r.diff)) {
+    const hunks = r.diff as Array<{ kind: 'context' | 'add' | 'remove'; lines: string[] }>;
+    const action = (r.action as string) ?? 'modified';
+    return (
+      <div className="mavis-tool-diff">
+        <div className="mavis-tool-diff-meta">
+          <span className="mavis-tool-diff-action">{action}</span>
+          {typeof r.bytes === 'number' && <span className="mavis-tool-diff-bytes">{r.bytes} B</span>}
+        </div>
+        <pre className="mavis-tool-diff-body">
+          {hunks.map((h, i) => (
+            <div key={i} className={`mavis-diff-hunk mavis-diff-${h.kind}`}>
+              {h.lines.map((line, j) => (
+                <div key={j} className="mavis-diff-line">
+                  <span className="mavis-diff-marker">
+                    {h.kind === 'add' ? '+' : h.kind === 'remove' ? '-' : ' '}
+                  </span>
+                  <span className="mavis-diff-text">{line || ' '}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </pre>
+      </div>
+    );
+  }
+  // Read tools / generic: truncated JSON.
+  return (
+    <pre className="mavis-tool-result">
+      {JSON.stringify(result, null, 2).slice(0, 1500)}
+    </pre>
   );
 }

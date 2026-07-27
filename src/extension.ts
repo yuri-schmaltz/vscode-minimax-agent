@@ -21,6 +21,7 @@ import { MavisClient } from './client/MavisClient';
 import { SecretStore } from './auth/SecretStore';
 import { OAuthManager } from './auth/OAuth';
 import { StatusBarController } from './statusbar/StatusBar';
+import { startQuotaPoller } from './statusbar/quota';
 import { ChatViewProvider } from './views/ChatViewProvider';
 import { DriveViewProvider, writeTempDriveFile, encodeDrivePayload } from './views/DriveViewProvider';
 import { SessionCache, createSessionCache } from './util/SessionCache';
@@ -40,7 +41,7 @@ import { MavisLMProvider, MAVIS_LM_VENDOR } from './lm/MavisLMProvider';
 import { MavisInlineCompletionProvider, INLINE_EDIT_SELECTOR } from './inline/InlineEditProvider';
 import { MavisNotebookControllerProvider } from './notebook/MavisNotebookController';
 import { MavisTaskProvider } from './tasks/MavisTaskProvider';
-import { getReadOnlyToolManifest } from './agent/manifest';
+import { getToolManifest } from './agent/manifest';
 
 let client: MavisClient | undefined;
 let secretStore: SecretStore | undefined;
@@ -103,6 +104,7 @@ export function activate(context: ExtensionContext): void {
     extensionPath: context.extensionPath,
     globalStoragePath: context.globalStorageUri.fsPath,
     workspace: workspaceRoot,
+    bashAllow: config.get<string[]>('tools.bashAllow', []),
     onStderr: (text) => {
       // Stream shim stderr into the shared Mavis output channel.
       // Each line is prefixed with [mavis:cli] for easy filtering.
@@ -170,6 +172,18 @@ export function activate(context: ExtensionContext): void {
   });
   statusBar.bind();
 
+  // B.4 — Quota poller. Best-effort; chat works regardless of
+  // whether the endpoint is reachable.
+  const stopQuota = startQuotaPoller(client, archonUrl, (info) => {
+    if (!info) return;
+    if (info.empty) {
+      statusBar?.setQuota(null);
+    } else {
+      statusBar?.setQuota(info);
+    }
+  });
+  context.subscriptions.push({ dispose: stopQuota });
+
   // Persist active context on every change. Wrap the original listeners
   // so we get a single source of truth for "what's the current agent /
   // session" regardless of which path triggered the change.
@@ -188,7 +202,7 @@ export function activate(context: ExtensionContext): void {
     newSessionId,
     onOpenSettings: () => commands.executeCommand('workbench.action.openSettings', 'mavis'),
     onLog: (line) => mavisOutput?.appendLine(`[mavis:chat] ${line}`),
-    getTools: () => getReadOnlyToolManifest(),
+    getTools: (mode) => getToolManifest(mode),
     recentSessions: () => (sessionCache?.getRecents() ?? []).map((r) => ({ id: r.id, agent: r.agent, title: r.title ?? '' })),
     onTabClosed: (id: string) => { void sessionCache?.removeRecent(id); },
     onNewSession: (id: string, agent: string) => {
@@ -197,7 +211,14 @@ export function activate(context: ExtensionContext): void {
       void sessionCache?.pushRecent({ id, agent, title: 'New chat' });
     },
   });
+  // B.4 — Webview theme.
+  chatView.setTheme(config.get<string>('webviewTheme', 'default'));
   context.subscriptions.push(
+    config.onDidChangeConfiguration((e: import('vscode').ConfigurationChangeEvent) => {
+      if (e.affectsConfiguration('mavis.webviewTheme')) {
+        if (chatView) chatView.setTheme(config.get<string>('webviewTheme', 'default'));
+      }
+    }),
     window.registerWebviewViewProvider('mavis.chatView', chatView, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

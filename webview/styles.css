@@ -385,3 +385,96 @@ body,
   max-height: 200px;
   overflow-y: auto;
 }
+
+/* B.2 — Diff viewer for write_file / edit_file tool results. */
+.mavis-tool-diff {
+  margin-top: 6px;
+  border: 1px solid var(--vscode-editorWidget-border, #333);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mavis-tool-diff-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #999);
+  border-bottom: 1px solid var(--vscode-editorWidget-border, #333);
+}
+.mavis-tool-diff-action {
+  background: var(--mavis-accent, #5e9ed6);
+  color: var(--mavis-accent-fg, #fff);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.mavis-tool-diff-bytes {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.mavis-tool-diff-body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+.mavis-diff-hunk { padding: 0; }
+.mavis-diff-add { background: rgba(63, 185, 80, 0.15); }
+.mavis-diff-remove { background: rgba(248, 81, 73, 0.15); }
+.mavis-diff-context { background: transparent; }
+.mavis-diff-line {
+  display: flex;
+  padding: 0 6px;
+  white-space: pre;
+}
+.mavis-diff-marker {
+  display: inline-block;
+  width: 1.2em;
+  color: var(--vscode-descriptionForeground, #888);
+  user-select: none;
+  flex-shrink: 0;
+}
+.mavis-diff-add .mavis-diff-marker { color: #3fb950; }
+.mavis-diff-remove .mavis-diff-marker { color: #f85149; }
+.mavis-diff-text { flex: 1; }
+
+/* B.4 — Optional webview themes. The default inherits the user's
+ * VSCode theme. Three named themes are available via
+ * `mavis.webviewTheme` setting: 'tokyo-night', 'rose-pine',
+ * 'gruvbox'. Apply by adding the class to the root element. */
+.mavis-theme-tokyo-night {
+  --mavis-accent: #7aa2f7;
+  --mavis-accent-fg: #1a1b26;
+  --mavis-fg: #c0caf5;
+  --mavis-bg: #1a1b26;
+  --mavis-border: #414868;
+  --mavis-input-bg: #24283b;
+  --mavis-user-bg: rgba(122, 162, 247, 0.08);
+  --mavis-system-fg: #565f89;
+}
+.mavis-theme-rose-pine {
+  --mavis-accent: #ebbcba;
+  --mavis-accent-fg: #191724;
+  --mavis-fg: #e0def4;
+  --mavis-bg: #191724;
+  --mavis-border: #403d52;
+  --mavis-input-bg: #1f1d2e;
+  --mavis-user-bg: rgba(235, 188, 186, 0.08);
+  --mavis-system-fg: #6e6a86;
+}
+.mavis-theme-gruvbox {
+  --mavis-accent: #fabd2f;
+  --mavis-accent-fg: #282828;
+  --mavis-fg: #ebdbb2;
+  --mavis-bg: #282828;
+  --mavis-border: #504945;
+  --mavis-input-bg: #3c3836;
+  --mavis-user-bg: rgba(250, 189, 47, 0.08);
+  --mavis-system-fg: #928374;
+}

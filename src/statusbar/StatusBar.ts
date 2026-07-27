@@ -53,6 +53,7 @@ export class StatusBarController {
   private currentAgent: string;
   private currentSession: string | undefined;
   private signedIn = false;
+  private quota: { used: number; total: number; remaining: number; resetMinutes: number } | null = null;
   private readonly opts: Required<Omit<StatusBarOptions, 'host' | 'client' | 'oauth' | 'initialAgent' | 'locale'>> & StatusBarOptions;
 
   constructor(opts: StatusBarOptions) {
@@ -92,6 +93,12 @@ export class StatusBarController {
   /** Update the locale (called when the user changes it in settings). */
   setLocale(locale: Locale): void {
     this.opts.locale = locale;
+    this.render();
+  }
+
+  /** Update the quota display (B.4). Pass null to clear. */
+  setQuota(info: { used: number; total: number; remaining: number; resetMinutes: number } | null): void {
+    this.quota = info;
     this.render();
   }
 
@@ -138,7 +145,10 @@ export class StatusBarController {
   render(): void {
     const sess = this.currentSession ? this.currentSession.slice(0, 8) : i18n('statusBar.shortSession', this.opts.locale);
     const signed = this.signedIn ? i18n('statusBar.signedIn', this.opts.locale) : i18n('statusBar.signedOut', this.opts.locale);
-    this.item.text = i18n('statusBar.text', this.opts.locale, { agent: this.currentAgent, session: sess, signed });
+    const quotaPart = this.quota && this.quota.total > 0
+      ? `$(mavis {this.quota.remaining}/${this.quota.total}, ${this.quota.resetMinutes}m)`
+      : '';
+    this.item.text = i18n('statusBar.text', this.opts.locale, { agent: this.currentAgent, session: sess, signed }) + (quotaPart ? '  ' + quotaPart : '');
     this.item.tooltip = i18n('statusBar.tooltip', this.opts.locale, { agent: this.currentAgent, session: this.currentSession ?? '—', signedIn: this.signedIn ? 'true' : 'false' });
   }
 

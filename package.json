@@ -2,7 +2,7 @@
   "name": "vscode-agent",
   "displayName": "MiniMax Agent",
   "description": "Use the MiniMax Agent (Mavis) directly inside VSCode — chat, code actions, sessions, drive, and scheduled automations.\n\nConverse com o Mavis, aplique code actions, agende automações, direto no VSCode.",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "publisher": "minimax",
   "license": "MIT",
   "homepage": "https://github.com/yuri-schmaltz/vscode-minimax-agent#readme",
@@ -297,6 +297,51 @@
           "default": "",
           "markdownDescription": "Bundled CLI version (shown in the status bar and settings UI). Defaults to the bundled shim's `package.json` version."
         },
+        "mavis.webviewTheme": {
+          "type": "string",
+          "enum": [
+            "default",
+            "tokyo-night",
+            "rose-pine",
+            "gruvbox"
+          ],
+          "default": "default",
+          "markdownDescription": "Optional color theme for the Mavis chat webview. 'default' inherits the active VSCode theme; the others override the chat panel's colors. (B.4 polish — purely cosmetic.)"
+        },
+        "mavis.tools.confirmWrites": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When true, the chat shows a confirmation modal for every `write_file` and `edit_file` tool call before it executes. The file is written only after you click 'Accept'. The default is false (writes are immediate + a 'Revert' button is shown in the chat for each change)."
+        },
+        "mavis.tools.bashAllow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "ls",
+            "cat",
+            "head",
+            "tail",
+            "wc",
+            "grep",
+            "find",
+            "echo",
+            "pwd",
+            "env",
+            "which",
+            "node --version",
+            "npm",
+            "pnpm",
+            "yarn",
+            "git",
+            "tsc",
+            "tsx",
+            "node",
+            "npx"
+          ],
+          "markdownDescription": "Allowlist of command prefixes (first whitespace-separated token) that the `bash` tool will run without prompting. Commands not in the list are still run but reported as `allowed: false` so the chat can warn. DANGEROUS patterns (rm -rf /, sudo, eval, curl|sh, fork bombs) are always rejected."
+        },
         "mavis.model": {
           "type": "string",
           "default": "MiniMax-M3",
@@ -358,6 +403,8 @@
     "pretest": "npm run typecheck && npm run lint"
   },
   "dependencies": {
+    "@types/diff": "^7.0.2",
+    "diff": "^9.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",

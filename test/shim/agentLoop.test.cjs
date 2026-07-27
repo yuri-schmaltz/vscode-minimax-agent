@@ -182,3 +182,130 @@ test('agent loop: tool_calls → execute → feed back → final answer', async 
     server.close();
   }
 });
+
+test('agent loop: bash tool is invoked, output fed back to model', async () => {
+  const { server, port } = await new Promise((resolve) => {
+    let callCount = 0;
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => body += c);
+      req.on('end', () => {
+        const reqJson = JSON.parse(body || '{}');
+        callCount += 1;
+        if (callCount === 1) {
+          // First turn: model decides to run `ls`.
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: 'chat1', model: 'test', created: 0,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant', content: '',
+                tool_calls: [{
+                  id: 'call_bash',
+                  type: 'function',
+                  function: { name: 'bash', arguments: '{"command":"ls"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+          }));
+        } else {
+          // Second turn: model gives a final answer referencing the
+          // bash output (which should be 'package.json\nREADME.md').
+          const toolMsgs = (reqJson.messages || []).filter((m) => m.role === 'tool');
+          const sawOutput = toolMsgs.some((m) => /package\.json/.test(typeof m.content === 'string' ? m.content : ''));
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: 'chat2', model: 'test', created: 0,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: sawOutput
+                  ? 'The directory contains package.json and README.md.'
+                  : 'ERROR: bash output missing from context',
+              },
+              finish_reason: 'stop',
+            }],
+            usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+          }));
+        }
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({ server: srv, port: srv.address().port }));
+  });
+  // Workspace: a real directory with a package.json so `ls` returns
+  // a meaningful result.
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'mavis-bash-'));
+  fs.writeFileSync(path.join(workdir, 'package.json'), '{"name":"x"}');
+  fs.writeFileSync(path.join(workdir, 'README.md'), '# test');
+
+  try {
+    const child = spawn(
+      process.execPath,
+      [SHIM, 'session', 'stream', '--session-id', 'sess_bash_test'],
+      {
+        env: {
+          ...process.env,
+          MAVIS_ARCHON_URL: `http://127.0.0.1:${port}`,
+          MAVIS_API_KEY: 'sk-test',
+          MAVIS_API_BASE: '/v1',
+          MAVIS_WORKSPACE: workdir,
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    const parser = new LineParser();
+    child.stdout.pipe(parser);
+    let stderrBuf = '';
+    child.stderr.on('data', (c) => { stderrBuf += c.toString('utf8'); });
+
+    await new Promise((resolve, reject) => {
+      const onEvt = setInterval(() => {
+        if (parser.events.some((e) => e.type === 'ready')) { clearInterval(onEvt); resolve(); }
+      }, 10);
+      setTimeout(() => { clearInterval(onEvt); reject(new Error('timeout waiting for ready. stderr=' + stderrBuf)); }, 3000);
+    });
+
+    child.stdin.write(JSON.stringify({
+      type: 'prompt',
+      text: 'list the workspace',
+      tools: [{
+        name: 'bash',
+        description: 'run a command',
+        parameters: { type: 'object', properties: { command: { type: 'string', description: 'c' } } },
+      }],
+      mode: 'builder',
+    }) + '\n');
+
+    await new Promise((resolve, reject) => {
+      const onDone = setInterval(() => {
+        if (parser.events.some((e) => e.type === 'done')) { clearInterval(onDone); resolve(); }
+      }, 10);
+      setTimeout(() => { clearInterval(onDone); reject(new Error('timeout waiting for done. events=' + JSON.stringify(parser.events) + ' stderr=' + stderrBuf)); }, 8000);
+    });
+    child.stdin.end();
+    await new Promise((r) => setTimeout(r, 100));
+    child.kill();
+
+    const events = parser.events;
+    const toolCalls = events.filter((e) => e.type === 'tool_call');
+    const toolResults = events.filter((e) => e.type === 'tool_result');
+    const messages = events.filter((e) => e.type === 'message' && e.content);
+    const errors = events.filter((e) => e.type === 'error');
+
+    assert.equal(toolCalls.length, 1, `expected 1 tool_call: ${JSON.stringify(events)}`);
+    assert.equal(toolCalls[0].name, 'bash');
+    assert.equal(toolResults.length, 1);
+    assert.ok(typeof toolResults[0].result === 'object');
+    assert.equal(toolResults[0].result.exitCode, 0);
+    assert.ok(/package\.json/.test(toolResults[0].result.stdout), `expected 'package.json' in bash output: ${toolResults[0].result.stdout}`);
+    assert.match(messages[0].content, /package\.json/);
+    assert.equal(errors.length, 0, `unexpected errors: ${JSON.stringify(errors)}`);
+  } finally {
+    fs.rmSync(workdir, { recursive: true });
+    server.close();
+  }
+});

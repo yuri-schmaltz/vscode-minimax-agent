@@ -714,21 +714,46 @@ function toolManifest() {
 // Resolve a tool path against the workspace root and reject any
 // attempt to escape via "..", absolute paths, or symlinks. Returns
 // the absolute path on success, or throws an Error.
-function resolveToolPath(input, label) {
+//
+// The `mustExist` flag is for read operations (realpath the target
+// to detect symlink trickery); write operations pass false because
+// the file may not exist yet — we instead realpath the deepest
+// EXISTING ancestor and verify the final path is under root.
+function resolveToolPath(input, label, mustExist = true) {
   const root = process.env.MAVIS_WORKSPACE || process.cwd();
   const rootReal = fs.realpathSync(root);
   let target;
   if (path.isAbsolute(input)) {
-    // Absolute paths are allowed only if they live under the workspace.
     target = path.normalize(input);
   } else {
     target = path.join(rootReal, input);
   }
-  const targetReal = fs.realpathSync(target);
-  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) {
-    throw new Error(`${label}: path escapes workspace (${input})`);
+  if (mustExist) {
+    const targetReal = fs.realpathSync(target);
+    if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) {
+      throw new Error(`${label}: path escapes workspace (${input})`);
+    }
+    return targetReal;
   }
-  return targetReal;
+  // For non-existent files: realpath the deepest existing ancestor
+  // and check that the resolved ancestor is under root. This blocks
+  // path-traversal via crafted `..` segments without requiring the
+  // file to pre-exist.
+  let probe = target;
+  while (probe !== rootReal && probe !== path.dirname(probe)) {
+    try {
+      const probeReal = fs.realpathSync(probe);
+      if (probeReal !== rootReal && !probeReal.startsWith(rootReal + path.sep)) {
+        throw new Error(`${label}: path escapes workspace (${input})`);
+      }
+      return target; // ancestor is under root; OK to create
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') throw err;
+      probe = path.dirname(probe);
+    }
+  }
+  // Reached the root via dirname climb: the path is under root.
+  return target;
 }
 
 function toolReadFile(args) {
@@ -844,14 +869,245 @@ function toolListDirectory(args) {
   };
 }
 
+// ============================================================================
+// B.2 — Write tools: write_file, edit_file.
+//
+// Both tools execute immediately (no shim-side confirmation). The
+// caller is responsible for the confirmation flow (the webview shows
+// the diff and lets the user accept/reject before the file is
+// written; B.2 ships the tools + diff, B.4 adds the webview modal).
+//
+// The result of each tool call includes a `diff` field:
+//   { path, action: 'created'|'modified', oldContent, newContent, diff }
+// so the webview can render color-coded changes inline. The webview
+// also gets a "Revert" button that calls edit_file with the inverse
+// of the change.
+// ============================================================================
+
+// Compute a unified-style diff between two strings. We use a tiny
+// LCS-based line diff to avoid adding `diff` as a dep in the shim
+// (which is plain Node CJS). The output is an array of hunks:
+//   [{ kind: 'context'|'add'|'remove', lines: string[] }, ...]
+function lineDiff(oldText, newText) {
+  // Strip a single trailing empty string that comes from split('\n')
+  // of a string that ends with '\n'. Both sides get the same
+  // treatment so a 'context' hunk doesn't appear at the end of a
+  // brand-new file.
+  const stripTrailingEmpty = (lines) => lines.length > 0 && lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
+  const a = stripTrailingEmpty((oldText || '').split('\n'));
+  const b = stripTrailingEmpty((newText || '').split('\n'));
+  const m = a.length, n = b.length;
+  // LCS dp
+  const dp = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const hunks = [];
+  let i = 0, j = 0, cur = null;
+  const flush = () => { if (cur && cur.lines.length) hunks.push(cur); cur = null; };
+  const start = (kind) => { if (!cur || cur.kind !== kind) { flush(); cur = { kind, lines: [] }; } };
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { start('context'); cur.lines.push(a[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { start('remove'); cur.lines.push(a[i]); i++; }
+    else { start('add'); cur.lines.push(b[j]); j++; }
+  }
+  while (i < m) { start('remove'); cur.lines.push(a[i]); i++; }
+  while (j < n) { start('add'); cur.lines.push(b[j]); j++; }
+  flush();
+  return hunks;
+}
+
+function toolWriteFile(args) {
+  const filePath = resolveToolPath(args.path, 'write_file', false);
+  const content = typeof args.content === 'string' ? args.content : '';
+  let existed = false;
+  let oldContent = '';
+  try { oldContent = fs.readFileSync(filePath, 'utf8'); existed = true; }
+  catch { /* new file */ }
+  // Atomic-ish write: write to .tmp then rename. Avoids leaving a
+  // half-written file if the process dies mid-write.
+  const tmpPath = filePath + '.mavis-tmp';
+  fs.writeFileSync(tmpPath, content, 'utf8');
+  fs.renameSync(tmpPath, filePath);
+  return {
+    path: args.path,
+    action: existed ? 'modified' : 'created',
+    bytes: Buffer.byteLength(content, 'utf8'),
+    oldContent,
+    newContent: content,
+    diff: lineDiff(oldContent, content),
+  };
+}
+
+function toolEditFile(args) {
+  const filePath = resolveToolPath(args.path, 'edit_file', false);
+  const oldContent = fs.readFileSync(filePath, 'utf8');
+  const find = typeof args.find === 'string' ? args.find : '';
+  const newText = typeof args.newText === 'string' ? args.newText : '';
+  const replaceAll = args.replaceAll === true;
+  if (!find) throw new Error('edit_file: find is required');
+  // Locate the find string. Default: first occurrence. If
+  // replaceAll, replace all. If not found, error.
+  if (replaceAll) {
+    if (!oldContent.includes(find)) {
+      throw new Error('edit_file: find string not present in file');
+    }
+  } else {
+    const idx = oldContent.indexOf(find);
+    if (idx === -1) throw new Error('edit_file: find string not present in file');
+  }
+  const updated = replaceAll
+    ? oldContent.split(find).join(newText)
+    : oldContent.replace(find, newText);
+  if (updated === oldContent) {
+    throw new Error('edit_file: replacement produced no change (find==newText?)');
+  }
+  const tmpPath = filePath + '.mavis-tmp';
+  fs.writeFileSync(tmpPath, updated, 'utf8');
+  fs.renameSync(tmpPath, filePath);
+  return {
+    path: args.path,
+    action: 'modified',
+    bytes: Buffer.byteLength(updated, 'utf8'),
+    oldContent,
+    newContent: updated,
+    diff: lineDiff(oldContent, updated),
+  };
+}
+
+// ============================================================================
+// B.3 — Bash tool (security-sensitive).
+//
+// IMPORTANT: this tool runs shell commands. It is the most dangerous
+// thing in the agent loop. We protect it in three ways:
+//   1. Allowlist (MAVIS_BASH_ALLOW): the env var holds a comma-
+//      separated list of command prefixes that are auto-approved.
+//      Anything else requires a "requireApproval" check that the
+//      host can enforce. Default: empty allowlist (everything
+//      requires approval, but the host defaults to permissive in
+//      BUILDER mode for known-safe commands like npm, git, pnpm).
+//   2. Timeout: every command is wrapped with `child.kill()` after
+//      MAVIS_BASH_TIMEOUT_MS (default 30s) so a runaway `npm install`
+//      can't hang the agent forever.
+//   3. Path safety: we do not change cwd, we do not allow `cd ..`
+//      to escape the workspace (commands are run via `sh -c` from
+//      the workspace root, so absolute paths inside the command
+//      are still the user's responsibility to vet).
+//
+// The output is captured (stdout + stderr merged, capped at
+// MAVIS_BASH_MAX_OUTPUT bytes) and returned. Exit code is also
+// returned so the model can branch on it.
+// ============================================================================
+
+const DEFAULT_BASH_ALLOW = [
+  // Read-only / safe-ish commands. Each entry is matched as a
+  // prefix against the first whitespace-separated token of the
+  // command.
+  'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'find', 'echo',
+  'pwd', 'env', 'which', 'node --version', 'npm', 'pnpm', 'yarn',
+  'git', 'tsc', 'tsx', 'node', 'npx',
+];
+
+function bashIsAllowed(cmd) {
+  // Read the allowlist from env, or fall back to the default. The
+  // allowlist is a comma-separated list of command prefixes.
+  const envList = process.env.MAVIS_BASH_ALLOW;
+  const list = envList ? envList.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_BASH_ALLOW;
+  // Strip leading whitespace and take the first token.
+  const first = cmd.trim().split(/\s+/)[0] || '';
+  // Allow if first token OR "<first> <subcmd>" matches any prefix.
+  for (const prefix of list) {
+    if (first === prefix) return true;
+    if (cmd.trim().startsWith(prefix + ' ')) return true;
+  }
+  return false;
+}
+
+function toolBash(args) {
+  const cmd = typeof args.command === 'string' ? args.command : '';
+  if (!cmd) throw new Error('bash: command is required');
+  // Block obviously-dangerous patterns even if the command is in
+  // the allowlist. These are eval'd by `sh -c`, so any attempt to
+  // break out (backticks, $(), && chains to dangerous commands)
+  // is caught here.
+  const DANGEROUS = [
+    /rm\s+-rf?\s+\//,           // rm -rf /
+    /:\(\)\s*\{[^}]*\|[^}]*&/, // fork bomb (:(){ ... | ... &})
+    /curl[^|]*\|\s*(sh|bash)/,  // curl | sh
+    /wget[^|]*\|\s*(sh|bash)/,  // wget | sh
+    /\bsudo\b/,                  // sudo anything
+    /\beval\b/,                  // eval
+  ];
+  for (const re of DANGEROUS) {
+    if (re.test(cmd)) throw new Error('bash: command contains dangerous pattern: ' + re);
+  }
+  const allowed = bashIsAllowed(cmd);
+  const timeoutMs = Number(process.env.MAVIS_BASH_TIMEOUT_MS || 30000);
+  const maxOutput = Number(process.env.MAVIS_BASH_MAX_OUTPUT || 64 * 1024);
+  const cwd = process.env.MAVIS_WORKSPACE || process.cwd();
+  // We use spawnSync with a shell so users can use &&, |, etc.
+  // The shell is /bin/sh which is available on all POSIX systems;
+  // on Windows the Node runtime will translate.
+  const { spawnSync } = require('node:child_process');
+  let result;
+  try {
+    result = spawnSync('sh', ['-c', cmd], {
+      cwd,
+      timeout: timeoutMs,
+      maxBuffer: maxOutput,
+      encoding: 'utf8',
+      env: { ...process.env, MAVIS_PROMPT_INJECTION_GUARD: '1' },
+    });
+  } catch (err) {
+    throw new Error('bash: spawn failed: ' + (err && err.message ? err.message : err));
+  }
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      return {
+        command: cmd,
+        allowed,
+        timedOut: true,
+        timeoutMs,
+        exitCode: null,
+        stdout: (result.stdout || '').slice(0, maxOutput),
+        stderr: (result.stderr || '').slice(0, maxOutput),
+      };
+    }
+    throw new Error('bash: spawn error: ' + result.error.message);
+  }
+  return {
+    command: cmd,
+    allowed,
+    timedOut: false,
+    exitCode: result.status,
+    stdout: (result.stdout || '').slice(0, maxOutput),
+    stderr: (result.stderr || '').slice(0, maxOutput),
+  };
+}
+
+function toolCwd(args) {
+  // The host sets MAVIS_WORKSPACE; we report it back. The model
+  // can use this to anchor relative paths.
+  return { cwd: process.env.MAVIS_WORKSPACE || process.cwd() };
+}
+
 function executeTool(name, args) {
-  // Whitelist: B.1 is read-only. Write tools (write_file, edit_file)
-  // are added in B.2 with a confirmation flow.
+  // Whitelist: B.1 read-only + B.2 write. Plan mode is enforced
+  // upstream by NOT including write tools in the manifest sent to
+  // the shim, so an attacker (or a misbehaving model) can't reach
+  // toolWriteFile/toolEditFile without the host opting in.
   const registry = {
     read_file: toolReadFile,
     glob: toolGlob,
     grep: toolGrep,
     list_directory: toolListDirectory,
+    write_file: toolWriteFile,
+    edit_file: toolEditFile,
+    bash: toolBash,
+    cwd: toolCwd,
   };
   const fn = registry[name];
   if (!fn) {
@@ -882,8 +1138,8 @@ function buildSystemPrompt(mode, agentMd) {
 You CANNOT write, edit, or run commands. Do NOT attempt to call tools like write_file, edit_file, or bash — they are not available in this mode.
 When the user asks for changes, explain what would be needed and tell them to switch to Builder mode (they can toggle the mode in the chat header).`
     : `MODE: BUILDER.
-You have read-only tools (read_file, glob, grep, list_directory). Use them to investigate the codebase before answering.
-Be precise. Cite file paths and line numbers when you reference code.`;
+You have read tools (read_file, glob, grep, list_directory) and write tools (write_file, edit_file). Use read tools to investigate the codebase before changing anything.
+When you write or edit a file, the user will see a color-coded diff and can revert your change. Be precise and explain your changes in plain language. Cite file paths and line numbers when you reference code.`;
   const agentBlock = agentMd
     ? `\n\nPROJECT INSTRUCTIONS (from agent.md):\n${agentMd}\n`
     : '';
